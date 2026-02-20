@@ -24,8 +24,14 @@ pub fn run() {
             ftp_client::get_remote_pwd,
             ftp_client::download_remote_file,
             ftp_client::upload_file,
+            ftp_client::delete_remote_file,
+            ftp_client::delete_remote_dir,
+            ftp_client::rename_remote_file,
+            ftp_client::create_remote_dir,
+            ftp_client::download_remote_folder,
             fs_commands::list_directory,
-            fs_commands::get_home_dir
+            fs_commands::get_home_dir,
+            fs_commands::get_file_icon
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

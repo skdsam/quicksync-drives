@@ -41,11 +41,37 @@ function restore(key: string, fallback: number): number {
   return v ? Number(v) : fallback;
 }
 
+// Import common icons
+const dirIcon = '📁';
+const defaultFileIcon = '📄';
+
 /* ───────── FileTree component ───────── */
 function FileTree({ rootPath }: { rootPath: string }) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [error, setError] = useState<string | null>(null);
+
+  // Icon cache structure mapping extension to base64
+  const [iconCache, setIconCache] = useState<Record<string, string>>({});
+
+  const getFileIcon = async (filename: string): Promise<string | null> => {
+    const extMatch = filename.match(/\.([^.]+)$/);
+    if (!extMatch) return null;
+    const ext = extMatch[1].toLowerCase();
+
+    // Check cache
+    if (iconCache[ext] !== undefined) return iconCache[ext];
+
+    try {
+      const base64Icon = await invoke<string>("get_file_icon", { ext });
+      setIconCache(prev => ({ ...prev, [ext]: base64Icon }));
+      return base64Icon;
+    } catch {
+      // Cache null if failed so we don't spam errors
+      setIconCache(prev => ({ ...prev, [ext]: "" }));
+      return null;
+    }
+  };
 
   const loadDir = useCallback(async (path: string) => {
     try {
@@ -104,9 +130,11 @@ function FileTree({ rootPath }: { rootPath: string }) {
             onClick={() => node.is_dir && toggleFolder(node, path)}
             onDoubleClick={() => { if (node.is_dir) setCurrentPath(node.path); }}
           >
-            <span className="tree-icon">
-              {node.is_dir ? (node.expanded ? "📂" : "📁") : "📄"}
-            </span>
+            <div className="tree-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {node.is_dir ? (node.expanded ? "📂" : dirIcon) : (
+                <FileIconRenderer filename={node.name} iconCache={iconCache} getFileIcon={getFileIcon} />
+              )}
+            </div>
             <span className="tree-name">{node.name}</span>
             {!node.is_dir && <span className="tree-size">{formatSize(node.size)}</span>}
             {node.loading && <span className="tree-loading">…</span>}
@@ -147,6 +175,42 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
 
+  // Icon cache
+  const [iconCache, setIconCache] = useState<Record<string, string>>({});
+
+  const getFileIcon = async (filename: string): Promise<string | null> => {
+    const extMatch = filename.match(/\.([^.]+)$/);
+    if (!extMatch) return null;
+    const ext = extMatch[1].toLowerCase();
+
+    // Check cache
+    if (iconCache[ext] !== undefined) return iconCache[ext];
+
+    try {
+      const base64Icon = await invoke<string>("get_file_icon", { ext });
+      setIconCache(prev => ({ ...prev, [ext]: base64Icon }));
+      return base64Icon;
+    } catch {
+      // Cache null if failed so we don't spam errors
+      setIconCache(prev => ({ ...prev, [ext]: "" }));
+      return null;
+    }
+  };
+
+  // Context Menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    entry: RemoteEntry | null;
+  } | null>(null);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, []);
+
   const loadRemoteDir = useCallback(async (path?: string) => {
     setLoading(true);
     setError(null);
@@ -182,6 +246,99 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
       onTransferMsg(result);
     } catch (err: any) {
       onTransferMsg(`Download error: ${err}`);
+    }
+  };
+
+  const handleDownloadFolder = async (folderName: string, localBaseDir?: string) => {
+    try {
+      onTransferMsg(`Downloading folder ${folderName}…`);
+      const home = await invoke<string>("get_home_dir");
+      const baseDir = localBaseDir || `${home}\\Downloads`;
+      const localFolder = `${baseDir}\\${folderName}`;
+
+      const result = await invoke<string>("download_remote_folder", {
+        remoteDir: folderName,
+        localDir: localFolder,
+      });
+
+      onTransferMsg(result);
+    } catch (err: any) {
+      onTransferMsg(`Download Folder error: ${err}`);
+    }
+  };
+
+  const handleDelete = async (entry: RemoteEntry) => {
+    if (!window.confirm(`Are you sure you want to delete ${entry.name}?`)) return;
+    try {
+      onTransferMsg(`Deleting ${entry.name}…`);
+      let result = "";
+      if (entry.is_dir) {
+        result = await invoke<string>("delete_remote_dir", { path: entry.name });
+      } else {
+        result = await invoke<string>("delete_remote_file", { path: entry.name });
+      }
+      onTransferMsg(result);
+      loadRemoteDir();
+    } catch (err: any) {
+      onTransferMsg(`Delete error: ${err}`);
+    }
+  };
+
+  const handleRename = async (entry: RemoteEntry) => {
+    const newName = window.prompt(`Rename ${entry.name} to:`, entry.name);
+    if (!newName || newName === entry.name) return;
+    try {
+      onTransferMsg(`Renaming ${entry.name} to ${newName}…`);
+      const result = await invoke<string>("rename_remote_file", {
+        oldPath: entry.name,
+        newPath: newName
+      });
+      onTransferMsg(result);
+      loadRemoteDir();
+    } catch (err: any) {
+      onTransferMsg(`Rename error: ${err}`);
+    }
+  };
+
+  const handleCopyPath = async (entry: RemoteEntry) => {
+    const fullPath = remotePath.endsWith("/")
+      ? `${remotePath}${entry.name}`
+      : `${remotePath}/${entry.name}`;
+
+    try {
+      await navigator.clipboard.writeText(fullPath);
+      onTransferMsg(`Copied path: ${fullPath}`);
+    } catch (err) {
+      onTransferMsg("Failed to copy path.");
+    }
+  };
+
+  const handleCopyFile = async (entry: RemoteEntry) => {
+    if (entry.is_dir) {
+      onTransferMsg("Copying directories is not yet supported.");
+      return;
+    }
+    const newName = window.prompt(`Copy ${entry.name} as:`, `Copy_of_${entry.name}`);
+    if (!newName) return;
+
+    try {
+      onTransferMsg(`Copying ${entry.name} to ${newName} (this may take a while)…`);
+      // 1. Download to temp
+      const home = await invoke<string>("get_home_dir");
+      const tempPath = `${home}\\.quicksync_temp_${entry.name}`;
+      await invoke<string>("download_remote_file", {
+        remoteName: entry.name,
+        localPath: tempPath,
+      });
+      // 2. Upload with new name
+      const result = await invoke<string>("upload_file", {
+        localPath: tempPath,
+        remoteName: newName,
+      });
+      onTransferMsg(`Copy complete: ${result}`);
+      loadRemoteDir();
+    } catch (err: any) {
+      onTransferMsg(`Copy error: ${err}`);
     }
   };
 
@@ -234,10 +391,18 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
             className="tree-row"
             onClick={() => entry.is_dir && navigateTo(entry.name)}
             onDoubleClick={() => !entry.is_dir && handleDownload(entry.name)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ x: e.pageX, y: e.pageY, entry });
+            }}
             style={{ cursor: entry.is_dir ? 'pointer' : 'default' }}
-            title={entry.is_dir ? 'Click to open' : 'Double-click to download'}
+            title={entry.is_dir ? 'Click to open' : 'Double-click to download. Right-click for options.'}
           >
-            <span className="tree-icon">{entry.is_dir ? '📁' : '📄'}</span>
+            <div className="tree-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {entry.is_dir ? dirIcon : (
+                <FileIconRenderer filename={entry.name} iconCache={iconCache} getFileIcon={getFileIcon} />
+              )}
+            </div>
             <span className="tree-name">{entry.name}</span>
             {!entry.is_dir && <span className="tree-size">{formatSize(entry.size)}</span>}
             {!entry.is_dir && (
@@ -249,9 +414,62 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
             )}
           </div>
         ))}
+
+        {contextMenu && contextMenu.entry && (
+          <div
+            className="context-menu"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="context-menu-header">{contextMenu.entry.name}</div>
+
+            {contextMenu.entry.is_dir ? (
+              <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDownloadFolder(contextMenu.entry!.name); }}>Download Folder</div>
+            ) : (
+              <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDownload(contextMenu.entry!.name); }}>Download File</div>
+            )}
+
+            <div className="context-menu-item" onClick={() => { setContextMenu(null); handleRename(contextMenu.entry!); }}>Rename</div>
+            <div className="context-menu-item" onClick={() => { setContextMenu(null); handleCopyPath(contextMenu.entry!); }}>Copy Path</div>
+
+            {!contextMenu.entry.is_dir && (
+              <div className="context-menu-item" onClick={() => { setContextMenu(null); handleCopyFile(contextMenu.entry!); }}>Copy File</div>
+            )}
+
+            <div className="context-menu-divider" />
+            <div className="context-menu-item text-danger" onClick={() => { setContextMenu(null); handleDelete(contextMenu.entry!); }}>Delete</div>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+// Separate component to handle individual file icon rendering asynchronously without blocking UI
+function FileIconRenderer({
+  filename,
+  iconCache,
+  getFileIcon
+}: {
+  filename: string,
+  iconCache: Record<string, string>,
+  getFileIcon: (filename: string) => Promise<string | null>
+}) {
+  const extMatch = filename.match(/\.([^.]+)$/);
+  const ext = extMatch ? extMatch[1].toLowerCase() : null;
+  const cachedIcon = ext ? iconCache[ext] : undefined;
+
+  useEffect(() => {
+    if (ext && cachedIcon === undefined) {
+      getFileIcon(filename).catch(() => { });
+    }
+  }, [ext, cachedIcon, filename, getFileIcon]);
+
+  if (cachedIcon) {
+    return <img src={cachedIcon} alt="icon" style={{ width: 16, height: 16 }} />;
+  }
+
+  return <span>{defaultFileIcon}</span>;
 }
 
 /* ───────── Resizer component ───────── */

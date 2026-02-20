@@ -1,8 +1,61 @@
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use suppaftp::tokio::{AsyncFtpStream, AsyncRustlsConnector, AsyncRustlsFtpStream};
+use suppaftp::types::Mode;
 use tauri::State;
 use tokio::sync::Mutex;
+
+#[derive(Debug)]
+struct DummyVerifier(Arc<dyn ServerCertVerifier>);
+
+impl DummyVerifier {
+    fn new(roots: Arc<rustls::RootCertStore>) -> Self {
+        let provider = rustls::crypto::ring::default_provider();
+        let default_verifier =
+            rustls::client::WebPkiServerVerifier::builder_with_provider(roots, provider.into())
+                .build()
+                .unwrap();
+        Self(default_verifier)
+    }
+}
+
+impl ServerCertVerifier for DummyVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
+}
 
 // Type aliases for state management in suppaftp 8.0.2
 // AsyncFtpStream = ImplAsyncFtpStream<AsyncNoTlsStream>  (plain)
@@ -57,9 +110,14 @@ pub async fn connect_ftp(
             let _ = root_store.add(cert);
         }
 
-        let tls_config = rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
+        let root_store_arc = Arc::new(root_store);
+        let mut tls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_store_arc.clone())
             .with_no_client_auth();
+
+        tls_config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(DummyVerifier::new(root_store_arc)));
 
         let tls_connector = suppaftp::tokio_rustls::TlsConnector::from(Arc::new(tls_config));
         let connector = AsyncRustlsConnector::from(tls_connector);
@@ -78,6 +136,9 @@ pub async fn connect_ftp(
             .await
             .map_err(|e| format!("Secure Login failed: {}", e))?;
 
+        // Enable passive mode so data connections work through firewalls/NAT
+        secure_stream.set_mode(Mode::Passive);
+
         let mut lock = state.secure_client.lock().await;
         *lock = Some(secure_stream);
         Ok(format!("Securely connected to {}", config.host))
@@ -94,6 +155,9 @@ pub async fn connect_ftp(
             )
             .await
             .map_err(|e| format!("Login failed: {}", e))?;
+
+        // Enable passive mode so data connections work through firewalls/NAT
+        ftp_stream.set_mode(Mode::Passive);
 
         let mut lock = state.client.lock().await;
         *lock = Some(ftp_stream);
@@ -328,6 +392,315 @@ pub async fn upload_file(
                 .await
                 .map_err(|e| format!("Upload failed: {}", e))?;
             return Ok(format!("Uploaded {} ({} bytes)", remote_name, size));
+        }
+    }
+    Err("No active FTP connection".into())
+}
+
+#[tauri::command]
+pub async fn delete_remote_file(
+    state: State<'_, FtpState>,
+    path: String,
+) -> Result<String, String> {
+    // Try secure client
+    {
+        let mut lock = state.secure_client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rm(&path)
+                .await
+                .map_err(|e| format!("Delete failed: {}", e))?;
+            return Ok(format!("Deleted file: {}", path));
+        }
+    }
+    // Try plain client
+    {
+        let mut lock = state.client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rm(&path)
+                .await
+                .map_err(|e| format!("Delete failed: {}", e))?;
+            return Ok(format!("Deleted file: {}", path));
+        }
+    }
+    Err("No active FTP connection".into())
+}
+
+#[tauri::command]
+pub async fn delete_remote_dir(state: State<'_, FtpState>, path: String) -> Result<String, String> {
+    // Note: rmdir usually only works if the directory is empty.
+    // For recursive deletion, a more complex approach is needed
+    // (listing contents and deleting recursively) but this is a starting point.
+    // Try secure client
+    {
+        let mut lock = state.secure_client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rmdir(&path)
+                .await
+                .map_err(|e| format!("Delete generic failed (directory must be empty): {}", e))?;
+            return Ok(format!("Deleted directory: {}", path));
+        }
+    }
+    // Try plain client
+    {
+        let mut lock = state.client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rmdir(&path)
+                .await
+                .map_err(|e| format!("Delete genric failed (directory must be empty): {}", e))?;
+            return Ok(format!("Deleted directory: {}", path));
+        }
+    }
+    Err("No active FTP connection".into())
+}
+
+#[tauri::command]
+pub async fn rename_remote_file(
+    state: State<'_, FtpState>,
+    old_path: String,
+    new_path: String,
+) -> Result<String, String> {
+    // Try secure client
+    {
+        let mut lock = state.secure_client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rename(&old_path, &new_path)
+                .await
+                .map_err(|e| format!("Rename failed: {}", e))?;
+            return Ok(format!("Renamed {} to {}", old_path, new_path));
+        }
+    }
+    // Try plain client
+    {
+        let mut lock = state.client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .rename(&old_path, &new_path)
+                .await
+                .map_err(|e| format!("Rename failed: {}", e))?;
+            return Ok(format!("Renamed {} to {}", old_path, new_path));
+        }
+    }
+    Err("No active FTP connection".into())
+}
+
+#[tauri::command]
+pub async fn create_remote_dir(state: State<'_, FtpState>, path: String) -> Result<String, String> {
+    // Try secure client
+    {
+        let mut lock = state.secure_client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .mkdir(&path)
+                .await
+                .map_err(|e| format!("Mkdir failed: {}", e))?;
+            return Ok(format!("Created directory: {}", path));
+        }
+    }
+    // Try plain client
+    {
+        let mut lock = state.client.lock().await;
+        if let Some(ref mut client) = *lock {
+            client
+                .mkdir(&path)
+                .await
+                .map_err(|e| format!("Mkdir failed: {}", e))?;
+            return Ok(format!("Created directory: {}", path));
+        }
+    }
+    Err("No active FTP connection".into())
+}
+
+#[async_recursion::async_recursion]
+async fn recursive_download_secure(
+    client: &mut SecureStream,
+    remote_dir: &str,
+    local_dir: &std::path::Path,
+) -> Result<u64, String> {
+    use tokio::io::AsyncReadExt;
+
+    if !local_dir.exists() {
+        std::fs::create_dir_all(local_dir)
+            .map_err(|e| format!("Failed to create local dir: {}", e))?;
+    }
+
+    client
+        .cwd(remote_dir)
+        .await
+        .map_err(|e| format!("CWD failed to {}: {}", remote_dir, e))?;
+    let lines = client
+        .list(None)
+        .await
+        .map_err(|e| format!("LIST failed in {}: {}", remote_dir, e))?;
+
+    let mut total_bytes = 0;
+
+    let mut entries = Vec::new();
+    for l in lines {
+        if let Some(entry) = parse_list_line(&l) {
+            entries.push(entry);
+        }
+    }
+
+    for entry in entries {
+        let entry_remote_path = format!("{}/{}", remote_dir, entry.name);
+        let entry_local_path = local_dir.join(&entry.name);
+
+        if entry.is_dir {
+            total_bytes +=
+                recursive_download_secure(client, &entry_remote_path, &entry_local_path).await?;
+            client
+                .cwd(remote_dir)
+                .await
+                .map_err(|e| format!("CWD failed returning to {}: {}", remote_dir, e))?;
+        } else {
+            let mut stream = client
+                .retr_as_stream(&entry.name)
+                .await
+                .map_err(|e| format!("Download failed for {}: {}", entry.name, e))?;
+            let mut buf = Vec::new();
+            stream
+                .read_to_end(&mut buf)
+                .await
+                .map_err(|e| format!("Read stream failed for {}: {}", entry.name, e))?;
+            client
+                .finalize_retr_stream(stream)
+                .await
+                .map_err(|e| format!("Finalize failed for {}: {}", entry.name, e))?;
+
+            std::fs::write(&entry_local_path, &buf)
+                .map_err(|e| format!("Save failed for {}: {}", entry.name, e))?;
+            total_bytes += buf.len() as u64;
+        }
+    }
+
+    Ok(total_bytes)
+}
+
+#[async_recursion::async_recursion]
+async fn recursive_download_plain(
+    client: &mut PlainStream,
+    remote_dir: &str,
+    local_dir: &std::path::Path,
+) -> Result<u64, String> {
+    use tokio::io::AsyncReadExt;
+
+    if !local_dir.exists() {
+        std::fs::create_dir_all(local_dir)
+            .map_err(|e| format!("Failed to create local dir: {}", e))?;
+    }
+
+    client
+        .cwd(remote_dir)
+        .await
+        .map_err(|e| format!("CWD failed to {}: {}", remote_dir, e))?;
+    let lines = client
+        .list(None)
+        .await
+        .map_err(|e| format!("LIST failed in {}: {}", remote_dir, e))?;
+
+    let mut total_bytes = 0;
+
+    let mut entries = Vec::new();
+    for l in lines {
+        if let Some(entry) = parse_list_line(&l) {
+            entries.push(entry);
+        }
+    }
+
+    for entry in entries {
+        let entry_remote_path = format!("{}/{}", remote_dir, entry.name);
+        let entry_local_path = local_dir.join(&entry.name);
+
+        if entry.is_dir {
+            total_bytes +=
+                recursive_download_plain(client, &entry_remote_path, &entry_local_path).await?;
+            client
+                .cwd(remote_dir)
+                .await
+                .map_err(|e| format!("CWD failed returning to {}: {}", remote_dir, e))?;
+        } else {
+            let mut stream = client
+                .retr_as_stream(&entry.name)
+                .await
+                .map_err(|e| format!("Download failed for {}: {}", entry.name, e))?;
+            let mut buf = Vec::new();
+            stream
+                .read_to_end(&mut buf)
+                .await
+                .map_err(|e| format!("Read stream failed for {}: {}", entry.name, e))?;
+            client
+                .finalize_retr_stream(stream)
+                .await
+                .map_err(|e| format!("Finalize failed for {}: {}", entry.name, e))?;
+
+            std::fs::write(&entry_local_path, &buf)
+                .map_err(|e| format!("Save failed for {}: {}", entry.name, e))?;
+            total_bytes += buf.len() as u64;
+        }
+    }
+
+    Ok(total_bytes)
+}
+
+#[tauri::command]
+pub async fn download_remote_folder(
+    state: State<'_, FtpState>,
+    remote_dir: String,
+    local_dir: String,
+) -> Result<String, String> {
+    let local_path = std::path::Path::new(&local_dir);
+
+    // Try secure client
+    {
+        let mut lock = state.secure_client.lock().await;
+        if let Some(ref mut client) = *lock {
+            let orig_cwd = client.pwd().await.unwrap_or_else(|_| "/".to_string());
+
+            let absolute_remote = if remote_dir.starts_with('/') {
+                remote_dir.clone()
+            } else {
+                let sep = if orig_cwd.ends_with('/') { "" } else { "/" };
+                format!("{}{}{}", orig_cwd, sep, remote_dir)
+            };
+
+            let result = recursive_download_secure(client, &absolute_remote, local_path).await;
+
+            let _ = client.cwd(&orig_cwd).await;
+
+            let bytes = result?;
+            return Ok(format!(
+                "Downloaded folder '{}' ({} bytes)",
+                remote_dir, bytes
+            ));
+        }
+    }
+    // Try plain client
+    {
+        let mut lock = state.client.lock().await;
+        if let Some(ref mut client) = *lock {
+            let orig_cwd = client.pwd().await.unwrap_or_else(|_| "/".to_string());
+
+            let absolute_remote = if remote_dir.starts_with('/') {
+                remote_dir.clone()
+            } else {
+                let sep = if orig_cwd.ends_with('/') { "" } else { "/" };
+                format!("{}{}{}", orig_cwd, sep, remote_dir)
+            };
+
+            let result = recursive_download_plain(client, &absolute_remote, local_path).await;
+
+            let _ = client.cwd(&orig_cwd).await;
+
+            let bytes = result?;
+            return Ok(format!(
+                "Downloaded folder '{}' ({} bytes)",
+                remote_dir, bytes
+            ));
         }
     }
     Err("No active FTP connection".into())

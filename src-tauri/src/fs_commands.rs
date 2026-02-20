@@ -60,3 +60,27 @@ pub fn get_home_dir() -> Result<String, String> {
         .map(|p| p.to_string_lossy().to_string())
         .ok_or_else(|| "Could not determine home directory".to_string())
 }
+
+#[tauri::command]
+pub fn get_file_icon(ext: String) -> Result<String, String> {
+    use base64::{engine::general_purpose, Engine as _};
+    use systemicons::get_icon;
+
+    // get_icon takes an extension like ".txt" and a size (16, 32, 64, 256)
+    let ext_with_dot = if ext.starts_with('.') {
+        ext.clone()
+    } else if ext.is_empty() {
+        return Err("Empty extension".into());
+    } else {
+        format!(".{}", ext)
+    };
+
+    // Try to get 16x16 icon (Standard small icon)
+    match get_icon(&ext_with_dot, 16) {
+        Ok(icon_bytes) => {
+            let base64_str = general_purpose::STANDARD.encode(icon_bytes);
+            Ok(format!("data:image/png;base64,{}", base64_str))
+        }
+        Err(e) => Err(format!("Failed to get icon for {}: {:?}", ext_with_dot, e)),
+    }
+}
