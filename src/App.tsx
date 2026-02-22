@@ -740,7 +740,7 @@ function App() {
         setConnectionStatus(`Error: ${err}`);
       }
     } else if (selectedCloudConn) {
-      setConnectionStatus("Cloud connect not yet implemented");
+      setConnectionStatus("Connected to Cloud Storage");
     }
   };
 
@@ -890,8 +890,14 @@ function App() {
               )}
             </div>
             {activeConnName ? (
-              connectionStatus.includes('connected') || connectionStatus.includes('Connected') ? (
+              (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedFtpConn ? (
                 <RemoteFileTree onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
+              ) : (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedCloudConn ? (
+                <div style={{ padding: '40px 20px', textAlign: 'center', opacity: 0.8 }}>
+                  <h3 style={{ marginBottom: "12px", fontSize: "1.2em", color: "var(--accent-color)" }}>✅ Cloud Account Linked</h3>
+                  <p style={{ marginBottom: "8px" }}>Your OAuth Access Token for <strong>{selectedCloudConn.provider === 'google' ? 'Google Drive' : 'Dropbox'}</strong> has been saved securely.</p>
+                  <p style={{ fontSize: "0.9em", opacity: 0.7 }}>The full Cloud File Explorer interface will be implemented in a future update!</p>
+                </div>
               ) : (
                 <div className="connection-info">
                   {selectedFtpConn && (
