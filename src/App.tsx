@@ -15,9 +15,9 @@ interface FileEntry {
 interface RemoteEntry {
   name: string;
   is_dir: boolean;
-  size: number;
-  permissions: string;
-  modified: string;
+  size: number | null;
+  last_modified: string | null;
+  id?: string;
 }
 
 interface TreeNode extends FileEntry {
@@ -27,11 +27,10 @@ interface TreeNode extends FileEntry {
 }
 
 /* ───────── Helpers ───────── */
-function formatSize(bytes: number): string {
-  if (bytes === 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+function formatSize(size: number | null): string {
+  if (size === null || size === 0) return "-";
+  const i = Math.floor(Math.log(size) / Math.log(1024));
+  return `${(size / Math.pow(1024, i)).toFixed(2)} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
 }
 
 function persist(key: string, value: number) {
@@ -169,7 +168,7 @@ function FileTree({ rootPath }: { rootPath: string }) {
 }
 
 /* ───────── RemoteFileTree component ───────── */
-function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => void }) {
+function RemoteFileTree({ onTransferMsg, cloudConfig }: { onTransferMsg: (msg: string) => void, cloudConfig?: CloudConnection }) {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [remotePath, setRemotePath] = useState("/");
   const [error, setError] = useState<string | null>(null);
@@ -216,8 +215,23 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
     setLoading(true);
     setError(null);
     try {
-      const files = await invoke<RemoteEntry[]>("list_remote_directory", { path: path ?? null });
-      const pwd = await invoke<string>("get_remote_pwd");
+      let files: RemoteEntry[];
+      let pwd = "";
+
+      if (cloudConfig) {
+        // Cloud Provider
+        files = await invoke<RemoteEntry[]>("list_cloud_directory", {
+          provider: cloudConfig.provider,
+          token: cloudConfig.access_token,
+          folderId: path === ".." ? null : path
+        });
+        pwd = path && path !== ".." ? path : "/ (Cloud Root)";
+      } else {
+        // Standard FTP
+        files = await invoke<RemoteEntry[]>("list_remote_directory", { path: path ?? null });
+        pwd = await invoke<string>("get_remote_pwd");
+      }
+
       setEntries(files);
       setRemotePath(pwd);
     } catch (err: any) {
@@ -226,24 +240,42 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cloudConfig]);
 
   useEffect(() => {
     loadRemoteDir();
   }, [loadRemoteDir]);
 
-  const navigateTo = (dirName: string) => loadRemoteDir(dirName);
+  const navigateTo = (entry: RemoteEntry) => {
+    if (cloudConfig) {
+      loadRemoteDir(entry.id);
+    } else {
+      loadRemoteDir(entry.name);
+    }
+  };
   const goUp = () => loadRemoteDir("..");
 
-  const handleDownload = async (fileName: string) => {
+  const handleDownload = async (entry: RemoteEntry) => {
     try {
-      onTransferMsg(`Downloading ${fileName}…`);
+      onTransferMsg(`Downloading ${entry.name}…`);
       const home = await invoke<string>("get_home_dir");
-      const localPath = `${home}\\Downloads\\${fileName}`;
-      const result = await invoke<string>("download_remote_file", {
-        remoteName: fileName,
-        localPath,
-      });
+      const localPath = `${home}\\Downloads\\${entry.name}`;
+
+      let result = "";
+      if (cloudConfig) {
+        if (!entry.id) throw new Error("Cloud entry missing ID.");
+        result = await invoke<string>("download_cloud_file", {
+          provider: cloudConfig.provider,
+          token: cloudConfig.access_token,
+          fileId: entry.id,
+          localPath,
+        });
+      } else {
+        result = await invoke<string>("download_remote_file", {
+          remoteName: entry.name,
+          localPath,
+        });
+      }
       onTransferMsg(result);
     } catch (err: any) {
       onTransferMsg(`Download error: ${err}`);
@@ -273,10 +305,16 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
     try {
       onTransferMsg(`Deleting ${entry.name}…`);
       let result = "";
-      if (entry.is_dir) {
-        result = await invoke<string>("delete_remote_dir", { path: entry.name });
+      if (cloudConfig) {
+        // Not Implemented Yet
+        onTransferMsg("Cloud delete not yet implemented.");
+        return;
       } else {
-        result = await invoke<string>("delete_remote_file", { path: entry.name });
+        if (entry.is_dir) {
+          result = await invoke<string>("delete_remote_dir", { path: entry.name });
+        } else {
+          result = await invoke<string>("delete_remote_file", { path: entry.name });
+        }
       }
       onTransferMsg(result);
       loadRemoteDir();
@@ -290,10 +328,16 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
     if (!newName || newName === entry.name) return;
     try {
       onTransferMsg(`Renaming ${entry.name} to ${newName}…`);
-      const result = await invoke<string>("rename_remote_file", {
-        oldPath: entry.name,
-        newPath: newName
-      });
+      let result = "";
+      if (cloudConfig) {
+        onTransferMsg("Cloud rename not yet implemented.");
+        return;
+      } else {
+        result = await invoke<string>("rename_remote_file", {
+          oldPath: entry.name,
+          newPath: newName
+        });
+      }
       onTransferMsg(result);
       loadRemoteDir();
     } catch (err: any) {
@@ -315,6 +359,11 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
   };
 
   const handleCopyFile = async (entry: RemoteEntry) => {
+    if (cloudConfig) {
+      onTransferMsg("Cloud copying is not yet implemented.");
+      return;
+    }
+
     if (entry.is_dir) {
       onTransferMsg("Copying directories is not yet supported.");
       return;
@@ -357,10 +406,23 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
       }
       try {
         onTransferMsg(`Uploading ${file.name}…`);
-        const result = await invoke<string>("upload_file", {
-          localPath: filePath,
-          remoteName: file.name,
-        });
+        let result = "";
+
+        if (cloudConfig) {
+          // Note: remotePath actually tracks the current folder ID or "root" in cloud mode
+          const parentId = remotePath === "/ (Cloud Root)" || remotePath === "" ? null : remotePath;
+          result = await invoke<string>("upload_cloud_file", {
+            provider: cloudConfig.provider,
+            token: cloudConfig.access_token,
+            localPath: filePath,
+            remoteParentId: parentId,
+          });
+        } else {
+          result = await invoke<string>("upload_file", {
+            localPath: filePath,
+            remoteName: file.name,
+          });
+        }
         onTransferMsg(result);
       } catch (err: any) {
         onTransferMsg(`Upload error: ${err}`);
@@ -390,8 +452,8 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
           <div
             key={entry.name}
             className="tree-row"
-            onClick={() => entry.is_dir && navigateTo(entry.name)}
-            onDoubleClick={() => !entry.is_dir && handleDownload(entry.name)}
+            onClick={() => entry.is_dir && navigateTo(entry)}
+            onDoubleClick={() => !entry.is_dir && handleDownload(entry)}
             onContextMenu={(e) => {
               e.preventDefault();
               setContextMenu({ x: e.pageX, y: e.pageY, entry });
@@ -409,7 +471,7 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
             {!entry.is_dir && (
               <button
                 className="btn-icon btn-download"
-                onClick={(e) => { e.stopPropagation(); handleDownload(entry.name); }}
+                onClick={(e) => { e.stopPropagation(); handleDownload(entry); }}
                 title="Download"
               >⬇</button>
             )}
@@ -427,7 +489,7 @@ function RemoteFileTree({ onTransferMsg }: { onTransferMsg: (msg: string) => voi
             {contextMenu.entry.is_dir ? (
               <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDownloadFolder(contextMenu.entry!.name); }}>Download Folder</div>
             ) : (
-              <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDownload(contextMenu.entry!.name); }}>Download File</div>
+              <div className="context-menu-item" onClick={() => { setContextMenu(null); handleDownload(contextMenu.entry!); }}>Download File</div>
             )}
 
             <div className="context-menu-item" onClick={() => { setContextMenu(null); handleRename(contextMenu.entry!); }}>Rename</div>
@@ -620,7 +682,7 @@ function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingC
               {provider === "google" && (
                 <div style={{ gridColumn: "1 / -1", fontSize: "0.85em", marginTop: "4px", backgroundColor: "rgba(255,255,255,0.05)", padding: "8px", borderRadius: "4px" }}>
                   <strong>How to get a token:</strong><br />
-                  1. Visit <a href="https://developers.google.com/oauthplayground/?code=4/0AfrIepCWgy_WF6Z2TVbyMfpuSzWfI4lK80YDHW5qiXPpcgN493kIxcNXvITg1pFJAIHrKA&scope=https://www.googleapis.com/auth/drive" target="_blank" rel="noreferrer" style={{ color: "var(--accent-color)" }}>Google OAuth Playground</a>.<br />
+                  1. Visit <a href="https://developers.google.com/oauthplayground/?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive&step=1" target="_blank" rel="noreferrer" style={{ color: "var(--accent-color)" }}>Google OAuth Playground</a>.<br />
                   2. Click <strong>Authorize APIs</strong> and log in with your Google Account.<br />
                   3. Click <strong>Exchange authorization code for tokens</strong>.<br />
                   4. Copy the resulting <strong>Access token</strong> and paste it above!
@@ -893,11 +955,7 @@ function App() {
               (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedFtpConn ? (
                 <RemoteFileTree onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
               ) : (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedCloudConn ? (
-                <div style={{ padding: '40px 20px', textAlign: 'center', opacity: 0.8 }}>
-                  <h3 style={{ marginBottom: "12px", fontSize: "1.2em", color: "var(--accent-color)" }}>✅ Cloud Account Linked</h3>
-                  <p style={{ marginBottom: "8px" }}>Your OAuth Access Token for <strong>{selectedCloudConn.provider === 'google' ? 'Google Drive' : 'Dropbox'}</strong> has been saved securely.</p>
-                  <p style={{ fontSize: "0.9em", opacity: 0.7 }}>The full Cloud File Explorer interface will be implemented in a future update!</p>
-                </div>
+                <RemoteFileTree cloudConfig={selectedCloudConn} onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
               ) : (
                 <div className="connection-info">
                   {selectedFtpConn && (

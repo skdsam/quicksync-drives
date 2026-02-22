@@ -3,6 +3,7 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_autostart::ManagerExt;
 
+pub mod cloud_client;
 pub mod config;
 pub mod fs_commands;
 mod ftp_client;
@@ -105,7 +106,10 @@ pub fn run() {
             ftp_client::download_remote_folder,
             fs_commands::list_directory,
             fs_commands::get_home_dir,
-            fs_commands::get_file_icon
+            fs_commands::get_file_icon,
+            cloud_client::list_cloud_directory,
+            cloud_client::download_cloud_file,
+            cloud_client::upload_cloud_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
