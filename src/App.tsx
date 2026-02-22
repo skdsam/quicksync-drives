@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useConfigStore, FtpConnection, CloudConnection } from "./store/config";
+import logo from "./assets/logo.png";
 import "./index.css";
 
 /* ───────── Types ───────── */
@@ -1283,7 +1284,10 @@ function App() {
       {/* Main Content */}
       <main className="main-content">
         <header className="header">
-          <h1>QuickSync Drives</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <img src={logo} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+            <h1>QuickSync Drives</h1>
+          </div>
           <div className="header-status">
             <span className={`status-badge ${connectionStatus.includes("Connected") ? "status-ok" : ""}`}>
               {connectionStatus}
