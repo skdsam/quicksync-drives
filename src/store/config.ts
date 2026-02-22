@@ -21,6 +21,7 @@ export interface CloudConnection {
 export interface AppConfig {
     ftp_connections: FtpConnection[];
     cloud_connections: CloudConnection[];
+    theme?: string;
 }
 
 interface ConfigStore {
@@ -32,7 +33,7 @@ interface ConfigStore {
 }
 
 export const useConfigStore = create<ConfigStore>((set) => ({
-    config: { ftp_connections: [], cloud_connections: [] },
+    config: { ftp_connections: [], cloud_connections: [], theme: 'dark' },
     loading: true,
     error: null,
 

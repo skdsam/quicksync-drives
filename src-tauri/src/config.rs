@@ -27,6 +27,8 @@ pub struct CloudConnection {
 pub struct AppConfig {
     pub ftp_connections: Vec<FtpConnection>,
     pub cloud_connections: Vec<CloudConnection>,
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 fn get_config_path(app: &AppHandle) -> Result<PathBuf, String> {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useConfigStore, FtpConnection } from "./store/config";
 import "./index.css";
 
@@ -593,6 +594,25 @@ function App() {
   useEffect(() => {
     invoke<string>("get_home_dir").then(setHomePath).catch(() => setHomePath("C:\\"));
   }, []);
+
+  // Theme listener and application
+  useEffect(() => {
+    // Apply theme from config when loaded
+    const currentTheme = config.theme || 'dark';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+  }, [config.theme]);
+
+  useEffect(() => {
+    const unlisten = listen<string>("theme-changed", (event) => {
+      const newTheme = event.payload;
+      document.documentElement.setAttribute('data-theme', newTheme);
+      saveConfig({ ...config, theme: newTheme });
+    });
+
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [config, saveConfig]);
 
   /* ── Connection CRUD ── */
   const handleSaveConn = (conn: FtpConnection) => {
