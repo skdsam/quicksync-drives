@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useConfigStore, FtpConnection } from "./store/config";
+import { useConfigStore, FtpConnection, CloudConnection } from "./store/config";
 import "./index.css";
 
 /* ───────── Types ───────── */
@@ -503,66 +503,178 @@ function Resizer({ direction, onResize }: { direction: "col" | "row"; onResize: 
 }
 
 /* ───────── Connection Form Modal ───────── */
-function ConnectionModal({ onClose, onSave, editing }: {
+function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingCloud }: {
   onClose: () => void;
-  onSave: (conn: FtpConnection) => void;
-  editing?: FtpConnection | null;
+  onSaveFtp: (conn: FtpConnection) => void;
+  onSaveCloud: (conn: CloudConnection) => void;
+  editingFtp?: FtpConnection | null;
+  editingCloud?: CloudConnection | null;
 }) {
-  const [name, setName] = useState(editing?.name || "");
-  const [host, setHost] = useState(editing?.host || "");
-  const [port, setPort] = useState(editing?.port || 21);
-  const [username, setUsername] = useState(editing?.username || "");
-  const [password, setPassword] = useState(editing?.password || "");
-  const [secure, setSecure] = useState(editing?.secure || false);
+  const isEditingCloud = !!editingCloud;
+  const [type, setType] = useState<"ftp" | "cloud">(isEditingCloud ? "cloud" : "ftp");
+
+  // FTP State
+  const [name, setName] = useState(editingFtp?.name || "");
+  const [host, setHost] = useState(editingFtp?.host || "");
+  const [port, setPort] = useState(editingFtp?.port || 21);
+  const [username, setUsername] = useState(editingFtp?.username || "");
+  const [password, setPassword] = useState(editingFtp?.password || "");
+  const [secure, setSecure] = useState(editingFtp?.secure || false);
+
+  // Cloud State
+  const [provider, setProvider] = useState(editingCloud?.provider || "google");
+  const [accountName, setAccountName] = useState(editingCloud?.account_name || "");
+  const [clientId, setClientId] = useState(editingCloud?.client_id || "");
+  const [clientSecret, setClientSecret] = useState(editingCloud?.client_secret || "");
+  const [authStatus, setAuthStatus] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({
-      id: editing?.id || Date.now().toString(),
-      name: name || `${host}:${port}`,
-      host,
-      port,
-      username,
-      password: password || undefined,
-      secure,
-    });
-    onClose();
+    if (type === "ftp") {
+      onSaveFtp({
+        id: editingFtp?.id || Date.now().toString(),
+        name: name || `${host}:${port}`,
+        host,
+        port,
+        username,
+        password: password || undefined,
+        secure,
+      });
+      onClose();
+    }
+  };
+
+  const handleAuthenticate = async () => {
+    if (!clientId || !clientSecret) {
+      setAuthStatus("Please provide Client ID and Secret.");
+      return;
+    }
+    setIsAuthenticating(true);
+    setAuthStatus("Opening browser for authentication...");
+    try {
+      const tokens = await invoke<any>("start_oauth_flow", {
+        provider,
+        clientId,
+        clientSecret
+      });
+
+      onSaveCloud({
+        id: editingCloud?.id || Date.now().toString(),
+        provider,
+        account_name: accountName || `${provider} Account`,
+        client_id: clientId,
+        client_secret: clientSecret,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      });
+
+      setAuthStatus("Successfully authenticated and saved!");
+      setTimeout(onClose, 1000);
+    } catch (err: any) {
+      setAuthStatus(`Authentication failed: ${err}`);
+    } finally {
+      setIsAuthenticating(false);
+    }
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
         <div className="modal-header">
-          <h2>{editing ? "Edit Connection" : "New Connection"}</h2>
+          <h2>
+            {editingFtp ? "Edit FTP Connection" : editingCloud ? "Edit Cloud Connection" : "New Connection"}
+          </h2>
           <button type="button" className="btn-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="form-grid">
-          <label>Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My FTP Server" />
+        {!editingFtp && !editingCloud && (
+          <div className="form-toggle-group">
+            <button
+              type="button"
+              className={`btn-toggle ${type === "ftp" ? "active" : ""}`}
+              onClick={() => setType("ftp")}
+            >
+              FTP Server
+            </button>
+            <button
+              type="button"
+              className={`btn-toggle ${type === "cloud" ? "active" : ""}`}
+              onClick={() => setType("cloud")}
+            >
+              Cloud Storage
+            </button>
+          </div>
+        )}
 
-          <label>Host *</label>
-          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ftp.example.com" required />
+        <div className="form-grid" style={{ marginTop: 16 }}>
+          {type === "ftp" ? (
+            <>
+              <label>Name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My FTP Server" />
 
-          <label>Port</label>
-          <input type="number" value={port} onChange={(e) => setPort(+e.target.value)} min={1} max={65535} />
+              <label>Host *</label>
+              <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ftp.example.com" required />
 
-          <label>Username *</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required />
+              <label>Port</label>
+              <input type="number" value={port} onChange={(e) => setPort(+e.target.value)} min={1} max={65535} />
 
-          <label>Password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" />
+              <label>Username *</label>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required />
 
-          <label>FTPS (Secure)</label>
-          <label className="toggle-container">
-            <input type="checkbox" checked={secure} onChange={(e) => setSecure(e.target.checked)} />
-            <span className="toggle-slider" />
-          </label>
+              <label>Password</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" />
+
+              <label>FTPS (Secure)</label>
+              <label className="toggle-container">
+                <input type="checkbox" checked={secure} onChange={(e) => setSecure(e.target.checked)} />
+                <span className="toggle-slider" />
+              </label>
+            </>
+          ) : (
+            <>
+              <label>Provider *</label>
+              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+                <option value="google">Google Drive</option>
+                <option value="dropbox">Dropbox</option>
+              </select>
+
+              <label>Account Name</label>
+              <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="Personal Drive" />
+
+              <label>Client ID *</label>
+              <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="OAuth Client ID" required />
+
+              <label>Client Secret *</label>
+              <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="OAuth Client Secret" required />
+            </>
+          )}
         </div>
 
-        <div className="modal-actions">
-          <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn-primary">{editing ? "Save" : "Add Connection"}</button>
+        <div className="modal-actions" style={{ flexDirection: "column", gap: "10px" }}>
+          {type === "cloud" && (
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ width: '100%' }}
+                onClick={handleAuthenticate}
+                disabled={isAuthenticating}
+              >
+                {isAuthenticating ? "Authenticating..." : "Authenticate with Browser"}
+              </button>
+              {authStatus && <div style={{ fontSize: '0.85em', textAlign: 'center', color: authStatus.includes('fail') ? '#ef4444' : '#10b981' }}>{authStatus}</div>}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', width: '100%', marginTop: '8px' }}>
+            <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            {type === "ftp" && (
+              <button type="submit" className="btn-primary">
+                {editingFtp ? "Save" : "Add Connection"}
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </div>
@@ -573,7 +685,8 @@ function ConnectionModal({ onClose, onSave, editing }: {
 function App() {
   const [connectionStatus, setConnectionStatus] = useState("Not Connected");
   const [showModal, setShowModal] = useState(false);
-  const [editingConn, setEditingConn] = useState<FtpConnection | null>(null);
+  const [editingFtp, setEditingFtp] = useState<FtpConnection | null>(null);
+  const [editingCloud, setEditingCloud] = useState<CloudConnection | null>(null);
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
   const [homePath, setHomePath] = useState("");
   const [transferMsgs, setTransferMsgs] = useState<string[]>([]);
@@ -615,7 +728,7 @@ function App() {
   }, [config, saveConfig]);
 
   /* ── Connection CRUD ── */
-  const handleSaveConn = (conn: FtpConnection) => {
+  const handleSaveFtp = (conn: FtpConnection) => {
     const existing = config.ftp_connections.findIndex((c) => c.id === conn.id);
     const updated = [...config.ftp_connections];
     if (existing >= 0) updated[existing] = conn;
@@ -623,29 +736,49 @@ function App() {
     saveConfig({ ...config, ftp_connections: updated });
   };
 
-  const handleDeleteConn = (id: string) => {
-    if (selectedConnId === id) setSelectedConnId(null);
-    saveConfig({ ...config, ftp_connections: config.ftp_connections.filter((c) => c.id !== id) });
+  const handleSaveCloud = (conn: CloudConnection) => {
+    const existing = config.cloud_connections.findIndex((c) => c.id === conn.id);
+    const updated = [...config.cloud_connections];
+    if (existing >= 0) updated[existing] = conn;
+    else updated.push(conn);
+    saveConfig({ ...config, cloud_connections: updated });
   };
 
-  const selectedConn = config.ftp_connections.find((c) => c.id === selectedConnId) || null;
+  const handleDeleteConn = (id: string, type: "ftp" | "cloud") => {
+    if (selectedConnId === id) {
+      setSelectedConnId(null);
+    }
+
+    if (type === "ftp") {
+      saveConfig({ ...config, ftp_connections: config.ftp_connections.filter((c) => c.id !== id) });
+    } else {
+      saveConfig({ ...config, cloud_connections: config.cloud_connections.filter((c) => c.id !== id) });
+    }
+  };
+
+  const selectedFtpConn = config.ftp_connections.find((c) => c.id === selectedConnId) || null;
+  const selectedCloudConn = config.cloud_connections.find((c) => c.id === selectedConnId) || null;
+  const activeConnName = selectedFtpConn ? selectedFtpConn.name : (selectedCloudConn ? selectedCloudConn.account_name : null);
 
   const handleConnect = async () => {
-    if (!selectedConn) return;
-    setConnectionStatus("Connecting…");
-    try {
-      const result = await invoke<string>("connect_ftp", {
-        config: {
-          host: selectedConn.host,
-          port: selectedConn.port,
-          username: selectedConn.username,
-          password: selectedConn.password || "",
-          secure: selectedConn.secure || false,
-        },
-      });
-      setConnectionStatus(result);
-    } catch (err: any) {
-      setConnectionStatus(`Error: ${err}`);
+    if (selectedFtpConn) {
+      setConnectionStatus("Connecting…");
+      try {
+        const result = await invoke<string>("connect_ftp", {
+          config: {
+            host: selectedFtpConn.host,
+            port: selectedFtpConn.port,
+            username: selectedFtpConn.username,
+            password: selectedFtpConn.password || "",
+            secure: selectedFtpConn.secure || false,
+          },
+        });
+        setConnectionStatus(result);
+      } catch (err: any) {
+        setConnectionStatus(`Error: ${err}`);
+      }
+    } else if (selectedCloudConn) {
+      setConnectionStatus("Cloud connect not yet implemented");
     }
   };
 
@@ -688,9 +821,11 @@ function App() {
       {/* Modal */}
       {showModal && (
         <ConnectionModal
-          onClose={() => { setShowModal(false); setEditingConn(null); }}
-          onSave={handleSaveConn}
-          editing={editingConn}
+          onClose={() => { setShowModal(false); setEditingFtp(null); setEditingCloud(null); }}
+          onSaveFtp={handleSaveFtp}
+          onSaveCloud={handleSaveCloud}
+          editingFtp={editingFtp}
+          editingCloud={editingCloud}
         />
       )}
 
@@ -698,12 +833,12 @@ function App() {
       <aside className="sidebar" style={{ width: sidebarW, minWidth: sidebarW }}>
         <div className="sidebar-header">
           <h2>Connections</h2>
-          <button className="btn-icon btn-add" onClick={() => { setEditingConn(null); setShowModal(true); }} title="Add Connection">+</button>
+          <button className="btn-icon btn-add" onClick={() => { setEditingFtp(null); setEditingCloud(null); setShowModal(true); }} title="Add Connection">+</button>
         </div>
 
         <div
           className={`sidebar-item ${!selectedConnId ? 'active' : ''}`}
-          onClick={() => setSelectedConnId(null)}
+          onClick={() => { setSelectedConnId(null) }}
         >
           <span>💻 Local System</span>
         </div>
@@ -712,7 +847,7 @@ function App() {
           <div
             key={c.id}
             className={`sidebar-item ${selectedConnId === c.id ? 'active' : ''}`}
-            onClick={() => setSelectedConnId(c.id)}
+            onClick={() => { setSelectedConnId(c.id) }}
             title={`${c.host}:${c.port}${c.secure ? ' (FTPS)' : ''}`}
           >
             <span style={{ flex: 1 }}>
@@ -720,12 +855,35 @@ function App() {
             </span>
             <button
               className="btn-icon btn-edit"
-              onClick={(e) => { e.stopPropagation(); setEditingConn(c); setShowModal(true); }}
+              onClick={(e) => { e.stopPropagation(); setEditingFtp(c); setShowModal(true); }}
               title="Edit connection"
             >✎</button>
             <button
               className="btn-icon btn-delete"
-              onClick={(e) => { e.stopPropagation(); handleDeleteConn(c.id); }}
+              onClick={(e) => { e.stopPropagation(); handleDeleteConn(c.id, "ftp"); }}
+              title="Remove connection"
+            >✕</button>
+          </div>
+        ))}
+
+        {config.cloud_connections.map((c) => (
+          <div
+            key={c.id}
+            className={`sidebar-item ${selectedConnId === c.id ? 'active' : ''}`}
+            onClick={() => { setSelectedConnId(c.id) }}
+            title={`${c.provider === 'google' ? 'Google Drive' : 'Dropbox'}`}
+          >
+            <span style={{ flex: 1 }}>
+              {c.provider === 'google' ? '🇬' : '🇩'} {c.account_name}
+            </span>
+            <button
+              className="btn-icon btn-edit"
+              onClick={(e) => { e.stopPropagation(); setEditingCloud(c); setShowModal(true); }}
+              title="Edit connection"
+            >✎</button>
+            <button
+              className="btn-icon btn-delete"
+              onClick={(e) => { e.stopPropagation(); handleDeleteConn(c.id, "cloud"); }}
               title="Remove connection"
             >✕</button>
           </div>
@@ -758,8 +916,8 @@ function App() {
 
           <div className="pane" style={{ flex: 1 }}>
             <div className="pane-header">
-              <span>{selectedConn ? `Remote: ${selectedConn.name}` : 'Remote Files'}</span>
-              {selectedConn && (
+              <span>{activeConnName ? `Remote: ${activeConnName}` : 'Remote Files'}</span>
+              {activeConnName && (
                 <div style={{ display: 'flex', gap: '6px' }}>
                   {connectionStatus.includes('connected') || connectionStatus.includes('Connected') ? (
                     <button className="btn-small btn-danger" onClick={handleDisconnect}>Disconnect</button>
@@ -769,14 +927,25 @@ function App() {
                 </div>
               )}
             </div>
-            {selectedConn ? (
+            {activeConnName ? (
               connectionStatus.includes('connected') || connectionStatus.includes('Connected') ? (
                 <RemoteFileTree onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
               ) : (
                 <div className="connection-info">
-                  <div className="conn-detail"><span>Host</span><span>{selectedConn.host}:{selectedConn.port}</span></div>
-                  <div className="conn-detail"><span>User</span><span>{selectedConn.username}</span></div>
-                  <div className="conn-detail"><span>Security</span><span>{selectedConn.secure ? '🔒 FTPS' : '🔓 Plain FTP'}</span></div>
+                  {selectedFtpConn && (
+                    <>
+                      <div className="conn-detail"><span>Host</span><span>{selectedFtpConn.host}:{selectedFtpConn.port}</span></div>
+                      <div className="conn-detail"><span>User</span><span>{selectedFtpConn.username}</span></div>
+                      <div className="conn-detail"><span>Security</span><span>{selectedFtpConn.secure ? '🔒 FTPS' : '🔓 Plain FTP'}</span></div>
+                    </>
+                  )}
+                  {selectedCloudConn && (
+                    <>
+                      <div className="conn-detail"><span>Provider</span><span style={{ textTransform: 'capitalize' }}>{selectedCloudConn.provider}</span></div>
+                      <div className="conn-detail"><span>Account</span><span>{selectedCloudConn.account_name}</span></div>
+                      <div className="conn-detail"><span>Status</span><span>{selectedCloudConn.access_token ? "Token Active" : "No Token"}</span></div>
+                    </>
+                  )}
                   <div className="conn-status">{connectionStatus}</div>
                 </div>
               )

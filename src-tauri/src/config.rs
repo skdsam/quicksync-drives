@@ -20,7 +20,10 @@ pub struct CloudConnection {
     pub id: String,
     pub provider: String, // "google", "dropbox", "onedrive"
     pub account_name: String,
-    pub token: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
