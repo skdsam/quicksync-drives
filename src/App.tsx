@@ -69,10 +69,34 @@ const dropboxIcon = (
 );
 
 /* ───────── FileTree component ───────── */
-function FileTree({ rootPath }: { rootPath: string }) {
+function FileTree({ rootPath, onTransferMsg, onDragOverPanel, refreshKey }: {
+  rootPath: string,
+  onTransferMsg: (msg: string) => void,
+  onDragOverPanel?: () => void,
+  refreshKey?: number
+}) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, entry: FileEntry | null } | null>(null);
+
+  const onContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+  };
+
+  const handleDelete = async (entry: FileEntry) => {
+    if (!window.confirm(`Are you sure you want to delete local ${entry.is_dir ? 'folder' : 'file'} "${entry.name}"?`)) return;
+    try {
+      onTransferMsg(`Deleting ${entry.name}…`);
+      const result = await invoke<string>("delete_local_file", { path: entry.path });
+      onTransferMsg(result);
+      loadDir(currentPath).then(setTree);
+    } catch (err: any) {
+      onTransferMsg(`Delete error: ${err}`);
+    }
+  };
 
   // Icon cache structure mapping extension to base64
   const [iconCache, setIconCache] = useState<Record<string, string>>({});
@@ -109,7 +133,7 @@ function FileTree({ rootPath }: { rootPath: string }) {
 
   useEffect(() => {
     loadDir(currentPath).then(setTree);
-  }, [currentPath, loadDir]);
+  }, [currentPath, loadDir, refreshKey]);
 
   const toggleFolder = async (node: TreeNode, idx: number[]) => {
     const update = (nodes: TreeNode[], path: number[]): TreeNode[] => {
@@ -152,6 +176,7 @@ function FileTree({ rootPath }: { rootPath: string }) {
             style={{ paddingLeft: `${depth * 16 + 8}px` }}
             onClick={() => node.is_dir && toggleFolder(node, path)}
             onDoubleClick={() => { if (node.is_dir) setCurrentPath(node.path); }}
+            onContextMenu={(e) => onContextMenu(e, node)}
           >
             <div className="tree-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {node.is_dir ? (node.expanded ? "📂" : dirIcon) : (
@@ -174,8 +199,47 @@ function FileTree({ rootPath }: { rootPath: string }) {
     if (parent && parent !== currentPath) setCurrentPath(parent);
   };
 
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onTransferMsg("DEBUG: Local handleDrop event detected");
+    setDragging(false);
+    const files = e.dataTransfer.files;
+    onTransferMsg(`DEBUG: Local files count: ${files.length}`);
+    if (!files.length) return;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const filePath = (file as any).path;
+      if (!filePath) {
+        onTransferMsg(`Cannot copy ${file.name} — no path available`);
+        continue;
+      }
+
+      try {
+        onTransferMsg(`Copying ${file.name} to local folder…`);
+        const result = await invoke<string>("copy_to_local", {
+          sourcePath: filePath,
+          destDir: currentPath,
+        });
+        onTransferMsg(result);
+      } catch (err: any) {
+        onTransferMsg(`Local Copy error: ${err}`);
+      }
+    }
+    // Refresh
+    loadDir(currentPath).then(setTree);
+  };
+
   return (
-    <div className="file-tree">
+    <div
+      className={`file-tree ${dragging ? 'file-tree-dragover' : ''}`}
+      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(true); onDragOverPanel?.(); }}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(true); onDragOverPanel?.(); }}
+      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(false); }}
+      onDrop={handleDrop}
+      style={{ position: 'relative' }}
+    >
       <div className="tree-toolbar">
         <button className="btn-icon" onClick={goUp} title="Go up">⬆</button>
         <span className="tree-path" title={currentPath}>{currentPath}</span>
@@ -184,17 +248,34 @@ function FileTree({ rootPath }: { rootPath: string }) {
       <div className="tree-list">
         {error && <div className="tree-error">{error}</div>}
         {!error && tree.length === 0 && <div className="tree-empty">Empty directory</div>}
+        {dragging && <div className="drop-indicator">Drop to Copy to Local</div>}
         {renderNodes(tree)}
+
+        {contextMenu && contextMenu.entry && (
+          <div
+            className="context-menu"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="context-menu-header">{contextMenu.entry.name}</div>
+            <div className="context-menu-item" onClick={() => { setContextMenu(null); navigator.clipboard.writeText(contextMenu.entry!.path); onTransferMsg("Path copied"); }}>Copy Path</div>
+            <div className="context-menu-divider" />
+            <div className="context-menu-item text-danger" onClick={() => { setContextMenu(null); handleDelete(contextMenu.entry!); }}>Delete</div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 /* ───────── RemoteFileTree component ───────── */
-function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
+function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig, onDragOverPanel, onPathChange, refreshKey }: {
   onTransferMsg: (msg: string) => void,
   downloadDir: string,
-  cloudConfig?: CloudConnection
+  cloudConfig?: CloudConnection,
+  onDragOverPanel?: () => void,
+  onPathChange?: (path: string) => void,
+  refreshKey?: number
 }) {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [remotePath, setRemotePath] = useState("/");
@@ -280,6 +361,7 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
 
       setEntries(files);
       setRemotePath(pwd);
+      onPathChange?.(pwd);
     } catch (err: any) {
       setError(String(err));
       setEntries([]);
@@ -291,7 +373,7 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
   useEffect(() => {
     // Only auto-load on first mount or config change
     loadRemoteDir();
-  }, [cloudConfig]); // Trigger only on config change to avoid infinite loops with pathStack dependency
+  }, [cloudConfig, refreshKey]); // Trigger only on config change to avoid infinite loops with pathStack dependency
 
   const navigateTo = (entry: RemoteEntry) => {
     if (cloudConfig) {
@@ -353,9 +435,15 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
       onTransferMsg(`Deleting ${entry.name}…`);
       let result = "";
       if (cloudConfig) {
-        // Not Implemented Yet
-        onTransferMsg("Cloud delete not yet implemented.");
-        return;
+        if (!entry.id) {
+          onTransferMsg("Cannot delete: cloud entry ID is missing.");
+          return;
+        }
+        result = await invoke<string>("delete_cloud_file", {
+          provider: cloudConfig.provider,
+          token: cloudConfig.access_token,
+          fileId: entry.id,
+        });
       } else {
         if (entry.is_dir) {
           result = await invoke<string>("delete_remote_dir", { path: entry.name });
@@ -440,8 +528,11 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    onTransferMsg("DEBUG: Remote handleDrop event detected");
     setDragging(false);
     const files = e.dataTransfer.files;
+    onTransferMsg(`DEBUG: Remote files count: ${files.length}`);
     if (!files.length) return;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -480,9 +571,11 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
   return (
     <div
       className={`file-tree ${dragging ? 'file-tree-dragover' : ''}`}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
+      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(true); onDragOverPanel?.(); }}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(true); onDragOverPanel?.(); }}
+      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragging(false); }}
       onDrop={handleDrop}
+      style={{ position: 'relative' }}
     >
       <div className="tree-toolbar">
         <button className="btn-icon" onClick={goUp} title="Go up">⬆</button>
@@ -774,6 +867,8 @@ function App() {
   const [homePath, setHomePath] = useState("");
   const [transferMsgs, setTransferMsgs] = useState<string[]>([]);
   const [downloadDir, setDownloadDir] = useState(() => localStorage.getItem("qs-download-dir") || "");
+  const [currentRemotePath, setCurrentRemotePath] = useState("/");
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Resizable panel sizes
   const [sidebarW, setSidebarW] = useState(() => restore("sidebar-w", 240));
@@ -802,9 +897,24 @@ function App() {
   // Theme listener and application
   useEffect(() => {
     // Apply theme from config when loaded
-    const currentTheme = config.theme || 'dark';
-    document.documentElement.setAttribute('data-theme', currentTheme);
+    if (config.theme) {
+      document.body.setAttribute('data-theme', config.theme);
+    }
   }, [config.theme]);
+
+  // Global UI polish
+  useEffect(() => {
+    // Disable native context menu
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", handleContextMenu);
+
+    return () => {
+      window.removeEventListener("contextmenu", handleContextMenu);
+    };
+  }, []);
+
 
   useEffect(() => {
     const unlisten = listen<string>("theme-changed", (event) => {
@@ -924,6 +1034,62 @@ function App() {
     }
   };
 
+  // Native DND (Tauri v2) — auto-detect target panel
+  // Browser onDragOver events DON'T fire for external file drags in Tauri,
+  // so we can't rely on lastDragTarget. Instead we check connection state:
+  //   • If a remote connection is active → upload to remote
+  //   • Otherwise → copy to local home directory
+  useEffect(() => {
+    const unlisten = listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+      const paths = event.payload.paths;
+      if (paths.length === 0) return;
+
+      const isRemoteConnected =
+        (connectionStatus.includes("connected") || connectionStatus.includes("Connected")) &&
+        (selectedFtpConn || selectedCloudConn);
+
+      for (const filePath of paths) {
+        const fileName = filePath.split(/[\\/]/).pop() || "unknown";
+        try {
+          if (isRemoteConnected) {
+            setTransferMsgs(prev => [...prev, `Uploading ${fileName} to remote…`]);
+            let result = "";
+            if (selectedCloudConn) {
+              const parentId = (currentRemotePath === "/ (Cloud Root)" || currentRemotePath === "") ? null : currentRemotePath;
+              result = await invoke<string>("upload_cloud_file", {
+                provider: selectedCloudConn.provider,
+                token: selectedCloudConn.access_token,
+                localPath: filePath,
+                remoteParentId: parentId,
+              });
+            } else {
+              result = await invoke<string>("upload_file", {
+                localPath: filePath,
+                remoteName: fileName,
+              });
+            }
+            setTransferMsgs(prev => [...prev, result]);
+          } else {
+            // No remote connection active → copy to local
+            setTransferMsgs(prev => [...prev, `Copying ${fileName} to local…`]);
+            const res = await invoke<string>("copy_to_local", {
+              sourcePath: filePath,
+              destDir: homePath,
+            });
+            setTransferMsgs(prev => [...prev, res]);
+          }
+        } catch (err) {
+          setTransferMsgs(prev => [...prev, `Drop Error: ${err}`]);
+        }
+      }
+      // Refresh panels after all drops processed
+      setRefreshKey(k => k + 1);
+    });
+    return () => {
+      unlisten.then(f => f());
+    };
+  }, [homePath, connectionStatus, selectedFtpConn, selectedCloudConn, currentRemotePath]);
+
   return (
     <div className="app-container">
       {/* Modal */}
@@ -1029,7 +1195,14 @@ function App() {
             <div className="pane-header">
               <span>Local Files</span>
             </div>
-            {homePath && <FileTree rootPath={homePath} />}
+            {homePath && (
+              <FileTree
+                rootPath={homePath}
+                onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
+
+                refreshKey={refreshKey}
+              />
+            )}
           </div>
 
           <Resizer direction="col" onResize={onPaneResize} />
@@ -1053,6 +1226,9 @@ function App() {
                   key={selectedConnId || 'ftp'}
                   onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
                   downloadDir={downloadDir}
+
+                  onPathChange={setCurrentRemotePath}
+                  refreshKey={refreshKey}
                 />
               ) : (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedCloudConn ? (
                 <RemoteFileTree
@@ -1060,6 +1236,9 @@ function App() {
                   cloudConfig={selectedCloudConn}
                   onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
                   downloadDir={downloadDir}
+
+                  onPathChange={setCurrentRemotePath}
+                  refreshKey={refreshKey}
                 />
               ) : (
                 <div className="connection-info">

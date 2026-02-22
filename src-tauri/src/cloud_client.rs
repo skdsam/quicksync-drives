@@ -338,3 +338,46 @@ pub async fn upload_cloud_file(
 
     Err(format!("Provider {} not recognized.", provider))
 }
+
+#[tauri::command]
+pub async fn delete_cloud_file(
+    provider: String,
+    token: String,
+    file_id: String,
+) -> Result<String, String> {
+    let client = Client::new();
+    if provider == "google" {
+        let url = format!("https://www.googleapis.com/drive/v3/files/{}", file_id);
+        let res = client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token.trim()))
+            .send()
+            .await
+            .map_err(|e| format!("Google Drive Delete request failed: {}", e))?;
+
+        if !res.status().is_success() {
+            let err_text = res.text().await.unwrap_or_default();
+            return Err(format!("Google Drive Delete Error: {}", err_text));
+        }
+        return Ok(format!("Successfully deleted file ID: {}", file_id));
+    } else if provider == "dropbox" {
+        let res = client
+            .post("https://api.dropboxapi.com/2/files/delete_v2")
+            .header("Authorization", format!("Bearer {}", token.trim()))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "path": file_id
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Dropbox Delete request failed: {}", e))?;
+
+        if !res.status().is_success() {
+            let err_text = res.text().await.unwrap_or_default();
+            return Err(format!("Dropbox Delete Error: {}", err_text));
+        }
+        return Ok(format!("Successfully deleted: {}", file_id));
+    }
+
+    Err(format!("Provider {} not recognized.", provider))
+}

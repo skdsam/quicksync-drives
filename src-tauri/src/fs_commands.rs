@@ -84,3 +84,43 @@ pub fn get_file_icon(ext: String) -> Result<String, String> {
         Err(e) => Err(format!("Failed to get icon for {}: {:?}", ext_with_dot, e)),
     }
 }
+
+#[tauri::command]
+pub fn delete_local_file(path: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    if p.is_dir() {
+        std::fs::remove_dir_all(&p)
+            .map_err(|e| format!("Failed to delete directory {}: {}", path, e))?;
+    } else {
+        std::fs::remove_file(&p).map_err(|e| format!("Failed to delete file {}: {}", path, e))?;
+    }
+    Ok(format!("Successfully deleted {}", path))
+}
+
+#[tauri::command]
+pub fn copy_to_local(source_path: String, dest_dir: String) -> Result<String, String> {
+    let source = std::path::PathBuf::from(&source_path);
+    let dest_dir_path = std::path::PathBuf::from(&dest_dir);
+
+    if !source.exists() {
+        return Err(format!("Source file does not exist: {}", source_path));
+    }
+
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "Invalid source file name".to_string())?;
+    let dest_path = dest_dir_path.join(file_name);
+
+    match std::fs::copy(&source, &dest_path) {
+        Ok(_) => Ok(format!(
+            "Successfully copied {} to {}",
+            source_path,
+            dest_path.display()
+        )),
+        Err(e) => Err(format!("Failed to copy file: {}", e)),
+    }
+}

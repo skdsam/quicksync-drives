@@ -124,6 +124,32 @@ body {
 .sidebar-item:hover .btn-edit {
   opacity: 1;
 }
+/* ───── Drag and Drop ───── */
+.file-tree-dragover {
+  border: 2px dashed var(--accent-color) !important;
+  background: var(--accent-glow) !important;
+}
+
+.drop-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.2);
+  backdrop-filter: blur(2px);
+  color: var(--accent-color);
+  font-weight: 600;
+  font-size: 14px;
+  z-index: 10;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .sidebar-item .btn-delete:hover {
   color: var(--error-color);
 }

@@ -108,9 +108,12 @@ pub fn run() {
             fs_commands::list_directory,
             fs_commands::get_home_dir,
             fs_commands::get_file_icon,
+            fs_commands::copy_to_local,
+            fs_commands::delete_local_file,
             cloud_client::list_cloud_directory,
             cloud_client::download_cloud_file,
-            cloud_client::upload_cloud_file
+            cloud_client::upload_cloud_file,
+            cloud_client::delete_cloud_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
