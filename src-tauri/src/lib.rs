@@ -1,7 +1,8 @@
-use tauri::menu::{CheckMenuItemBuilder, Menu, Submenu};
-use tauri::{Emitter, Manager};
+use tauri::menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, Submenu};
+use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::DialogExt;
 
 pub mod cloud_client;
 pub mod config;
@@ -59,8 +60,11 @@ pub fn run() {
 
             let options_submenu = Submenu::with_items(app, "Options", true, &[&autostart_item])?;
 
+            let about_item = MenuItemBuilder::new("About").id("about").build(app)?;
+            let help_submenu = Submenu::with_items(app, "Help", true, &[&about_item])?;
+
             // Build Main Menu
-            let menu = Menu::with_items(app, &[&view_submenu, &options_submenu])?;
+            let menu = Menu::with_items(app, &[&view_submenu, &options_submenu, &help_submenu])?;
 
             app.set_menu(menu)?;
 
@@ -85,6 +89,12 @@ pub fn run() {
                             let _ = autostart_item.set_checked(true);
                         }
                     }
+                } else if event.id() == "about" {
+                    app_handle
+                        .dialog()
+                        .message("QuickSync Drives v1.0\nA multi-cloud sync and FTP client.")
+                        .title("About QuickSync Drives")
+                        .show();
                 }
             });
 
