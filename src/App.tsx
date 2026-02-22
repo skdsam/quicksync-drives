@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useConfigStore, FtpConnection, CloudConnection } from "./store/config";
 import "./index.css";
 
@@ -42,8 +43,30 @@ function restore(key: string, fallback: number): number {
 }
 
 // Import common icons
-const dirIcon = '📁';
+const dirIcon = (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style={{ opacity: 0.8, color: "var(--warning-color)" }}>
+    <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+  </svg>
+);
 const defaultFileIcon = '📄';
+
+const googleIcon = (
+  <svg viewBox="0 0 24 24" width="16" height="16">
+    <path fill="#4285F4" d="M15.418 5L22.5 17.5l-3.55 6.188L11.85 11.188z" />
+    <path fill="#34A853" d="M1.5 17.5L8.582 5h7.082l-7.082 12.5z" />
+    <path fill="#FBBC05" d="M8.582 17.5L1.5 17.5L5.05 11.188h14.15z" />
+  </svg>
+);
+
+const dropboxIcon = (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="#0061FF">
+    <path d="M6 2L1 5.4L6 8.8L11 5.4L6 2Z" />
+    <path d="M18 2L13 5.4L18 8.8L23 5.4L18 2Z" />
+    <path d="M6 15.6L1 12.2L6 8.8L11 12.2L6 15.6Z" />
+    <path d="M18 15.6L13 12.2L18 8.8L23 12.2L18 15.6Z" />
+    <path d="M6 16.6L11 20L16 16.6L11 13.2L6 16.6Z" />
+  </svg>
+);
 
 /* ───────── FileTree component ───────── */
 function FileTree({ rootPath }: { rootPath: string }) {
@@ -168,7 +191,11 @@ function FileTree({ rootPath }: { rootPath: string }) {
 }
 
 /* ───────── RemoteFileTree component ───────── */
-function RemoteFileTree({ onTransferMsg, cloudConfig }: { onTransferMsg: (msg: string) => void, cloudConfig?: CloudConnection }) {
+function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
+  onTransferMsg: (msg: string) => void,
+  downloadDir: string,
+  cloudConfig?: CloudConnection
+}) {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [remotePath, setRemotePath] = useState("/");
   const [error, setError] = useState<string | null>(null);
@@ -258,8 +285,7 @@ function RemoteFileTree({ onTransferMsg, cloudConfig }: { onTransferMsg: (msg: s
   const handleDownload = async (entry: RemoteEntry) => {
     try {
       onTransferMsg(`Downloading ${entry.name}…`);
-      const home = await invoke<string>("get_home_dir");
-      const localPath = `${home}\\Downloads\\${entry.name}`;
+      const localPath = `${downloadDir}\\${entry.name}`;
 
       let result = "";
       if (cloudConfig) {
@@ -285,8 +311,7 @@ function RemoteFileTree({ onTransferMsg, cloudConfig }: { onTransferMsg: (msg: s
   const handleDownloadFolder = async (folderName: string, localBaseDir?: string) => {
     try {
       onTransferMsg(`Downloading folder ${folderName}…`);
-      const home = await invoke<string>("get_home_dir");
-      const baseDir = localBaseDir || `${home}\\Downloads`;
+      const baseDir = localBaseDir || downloadDir;
       const localFolder = `${baseDir}\\${folderName}`;
 
       const result = await invoke<string>("download_remote_folder", {
@@ -374,8 +399,7 @@ function RemoteFileTree({ onTransferMsg, cloudConfig }: { onTransferMsg: (msg: s
     try {
       onTransferMsg(`Copying ${entry.name} to ${newName} (this may take a while)…`);
       // 1. Download to temp
-      const home = await invoke<string>("get_home_dir");
-      const tempPath = `${home}\\.quicksync_temp_${entry.name}`;
+      const tempPath = `${downloadDir}\\.quicksync_temp_${entry.name}`;
       await invoke<string>("download_remote_file", {
         remoteName: entry.name,
         localPath: tempPath,
@@ -727,6 +751,7 @@ function App() {
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
   const [homePath, setHomePath] = useState("");
   const [transferMsgs, setTransferMsgs] = useState<string[]>([]);
+  const [downloadDir, setDownloadDir] = useState(() => localStorage.getItem("qs-download-dir") || "");
 
   // Resizable panel sizes
   const [sidebarW, setSidebarW] = useState(() => restore("sidebar-w", 240));
@@ -742,7 +767,14 @@ function App() {
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
   useEffect(() => {
-    invoke<string>("get_home_dir").then(setHomePath).catch(() => setHomePath("C:\\"));
+    invoke<string>("get_home_dir").then((home) => {
+      if (!localStorage.getItem("qs-download-dir")) {
+        const defaultDrop = `${home}\\Downloads`;
+        setDownloadDir(defaultDrop);
+        localStorage.setItem("qs-download-dir", defaultDrop);
+      }
+      setHomePath(home);
+    }).catch(() => setHomePath("C:\\"));
   }, []);
 
   // Theme listener and application
@@ -853,6 +885,23 @@ function App() {
     persist("queue-h", next);
   }, []);
 
+  const handleBrowseDownloadDir = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: downloadDir,
+        title: "Select Download Folder"
+      });
+      if (selected && typeof selected === "string") {
+        setDownloadDir(selected);
+        localStorage.setItem("qs-download-dir", selected);
+      }
+    } catch (err) {
+      console.error("Failed to open folder picker", err);
+    }
+  };
+
   return (
     <div className="app-container">
       {/* Modal */}
@@ -877,7 +926,8 @@ function App() {
           className={`sidebar-item ${!selectedConnId ? 'active' : ''}`}
           onClick={() => { setSelectedConnId(null) }}
         >
-          <span>💻 Local System</span>
+          <div className="sidebar-icon">💻</div>
+          <span>Local System</span>
         </div>
 
         {config.ftp_connections.map((c) => (
@@ -887,8 +937,11 @@ function App() {
             onClick={() => { setSelectedConnId(c.id) }}
             title={`${c.host}:${c.port}${c.secure ? ' (FTPS)' : ''}`}
           >
+            <div className="sidebar-icon">
+              {c.secure ? '🔒' : '🌐'}
+            </div>
             <span style={{ flex: 1 }}>
-              {c.secure ? '🔒' : '🌐'} {c.name}
+              {c.name}
             </span>
             <button
               className="btn-icon btn-edit"
@@ -903,28 +956,36 @@ function App() {
           </div>
         ))}
 
-        {config.cloud_connections.map((c) => (
-          <div
-            key={c.id}
-            className={`sidebar-item ${selectedConnId === c.id ? 'active' : ''}`}
-            onClick={() => { setSelectedConnId(c.id) }}
-            title={`${c.provider === 'google' ? 'Google Drive' : 'Dropbox'}`}
-          >
-            <span style={{ flex: 1 }}>
-              {c.provider === 'google' ? '🇬' : '🇩'} {c.account_name}
-            </span>
-            <button
-              className="btn-icon btn-edit"
-              onClick={(e) => { e.stopPropagation(); setEditingCloud(c); setShowModal(true); }}
-              title="Edit connection"
-            >✎</button>
-            <button
-              className="btn-icon btn-delete"
-              onClick={(e) => { e.stopPropagation(); handleDeleteConn(c.id, "cloud"); }}
-              title="Remove connection"
-            >✕</button>
-          </div>
-        ))}
+        {config.cloud_connections.map((c) => {
+          const isEmail = c.account_name.includes('@');
+          const displayName = isEmail ? (c.provider === 'google' ? 'Google Drive' : 'Dropbox') : c.account_name;
+
+          return (
+            <div
+              key={c.id}
+              className={`sidebar-item ${selectedConnId === c.id ? 'active' : ''}`}
+              onClick={() => { setSelectedConnId(c.id) }}
+              title={`${c.provider === 'google' ? 'Google Drive' : 'Dropbox'} - ${c.account_name}`}
+            >
+              <span className="sidebar-icon">
+                {c.provider === 'google' ? googleIcon : dropboxIcon}
+              </span>
+              <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {displayName}
+              </span>
+              <button
+                className="btn-icon btn-edit"
+                onClick={(e) => { e.stopPropagation(); setEditingCloud(c); setShowModal(true); }}
+                title="Edit connection"
+              >✎</button>
+              <button
+                className="btn-icon btn-delete"
+                onClick={(e) => { e.stopPropagation(); handleDeleteConn(c.id, "cloud"); }}
+                title="Remove connection"
+              >✕</button>
+            </div>
+          );
+        })}
       </aside>
 
       <Resizer direction="col" onResize={onSidebarResize} />
@@ -966,9 +1027,16 @@ function App() {
             </div>
             {activeConnName ? (
               (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedFtpConn ? (
-                <RemoteFileTree onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
+                <RemoteFileTree
+                  onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
+                  downloadDir={downloadDir}
+                />
               ) : (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedCloudConn ? (
-                <RemoteFileTree cloudConfig={selectedCloudConn} onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])} />
+                <RemoteFileTree
+                  cloudConfig={selectedCloudConn}
+                  onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
+                  downloadDir={downloadDir}
+                />
               ) : (
                 <div className="connection-info">
                   {selectedFtpConn && (
@@ -999,7 +1067,20 @@ function App() {
         {/* Queue */}
         <Resizer direction="row" onResize={onQueueResize} />
         <footer className="queue-panel" style={{ height: queueH, minHeight: queueH }}>
-          <div className="queue-header">Transfer Queue</div>
+          <div className="queue-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Transfer Queue</span>
+            <div className="download-dir-picker" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Download To:</span>
+              <input
+                type="text"
+                readOnly
+                value={downloadDir}
+                style={{ fontSize: '11px', padding: '2px 8px', width: '200px', cursor: 'pointer' }}
+                onClick={handleBrowseDownloadDir}
+              />
+              <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={handleBrowseDownloadDir}>Browse</button>
+            </div>
+          </div>
           {transferMsgs.length === 0 ? (
             <div className="queue-empty">No active transfers.</div>
           ) : (

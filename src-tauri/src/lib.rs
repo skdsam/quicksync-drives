@@ -23,6 +23,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ftp_client::FtpState::default())
         .setup(|app| {
             // Read saved config to set initial menu state

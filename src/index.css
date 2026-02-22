@@ -100,9 +100,18 @@ body {
 }
 .sidebar-item.active {
   background: var(--accent-glow);
-  color: var(--accent-color-hover);
+  color: var(--accent-color);
   border-left-color: var(--accent-color);
   font-weight: 500;
+}
+
+.sidebar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 .sidebar-item .btn-delete,
 .sidebar-item .btn-edit {
