@@ -198,6 +198,7 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
 }) {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [remotePath, setRemotePath] = useState("/");
+  const [pathStack, setPathStack] = useState<{ id: string, name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -238,7 +239,7 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
     return () => window.removeEventListener("click", handleClick);
   }, []);
 
-  const loadRemoteDir = useCallback(async (path?: string) => {
+  const loadRemoteDir = useCallback(async (path?: string, dirName?: string) => {
     setLoading(true);
     setError(null);
     try {
@@ -247,12 +248,30 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
 
       if (cloudConfig) {
         // Cloud Provider
+        const isUp = path === "..";
+        const folderId = isUp
+          ? (pathStack.length > 1 ? pathStack[pathStack.length - 2].id : null)
+          : (path ?? null);
+
         files = await invoke<RemoteEntry[]>("list_cloud_directory", {
           provider: cloudConfig.provider,
           token: cloudConfig.access_token,
-          folderId: path === ".." ? null : path
+          folderId: folderId
         });
-        pwd = path && path !== ".." ? path : "/ (Cloud Root)";
+
+        let nextStack = pathStack;
+        if (isUp) {
+          nextStack = pathStack.slice(0, -1);
+          setPathStack(nextStack);
+        } else if (path && dirName) {
+          nextStack = [...pathStack, { id: path, name: dirName }];
+          setPathStack(nextStack);
+        } else if (!path) {
+          nextStack = [];
+          setPathStack([]);
+        }
+
+        pwd = nextStack.length === 0 ? "/ (Cloud Root)" : "Root / " + nextStack.map(s => s.name).join(" / ");
       } else {
         // Standard FTP
         files = await invoke<RemoteEntry[]>("list_remote_directory", { path: path ?? null });
@@ -267,15 +286,18 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig }: {
     } finally {
       setLoading(false);
     }
-  }, [cloudConfig]);
+  }, [cloudConfig, pathStack]);
 
   useEffect(() => {
+    // Only auto-load on first mount or config change
     loadRemoteDir();
-  }, [loadRemoteDir]);
+  }, [cloudConfig]); // Trigger only on config change to avoid infinite loops with pathStack dependency
 
   const navigateTo = (entry: RemoteEntry) => {
     if (cloudConfig) {
-      loadRemoteDir(entry.id);
+      if (entry.id) {
+        loadRemoteDir(entry.id, entry.name);
+      }
     } else {
       loadRemoteDir(entry.name);
     }
@@ -1028,11 +1050,13 @@ function App() {
             {activeConnName ? (
               (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedFtpConn ? (
                 <RemoteFileTree
+                  key={selectedConnId || 'ftp'}
                   onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
                   downloadDir={downloadDir}
                 />
               ) : (connectionStatus.includes('connected') || connectionStatus.includes('Connected')) && selectedCloudConn ? (
                 <RemoteFileTree
+                  key={selectedConnId || 'cloud'}
                   cloudConfig={selectedCloudConn}
                   onTransferMsg={(msg) => setTransferMsgs((prev) => [...prev, msg])}
                   downloadDir={downloadDir}
