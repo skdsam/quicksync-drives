@@ -539,9 +539,11 @@ function FileIconRenderer({
 function Resizer({ direction, onResize }: { direction: "col" | "row"; onResize: (delta: number) => void }) {
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
-    const startPos = direction === "col" ? e.clientX : e.clientY;
+    let startPos = direction === "col" ? e.clientX : e.clientY;
     const onMove = (ev: MouseEvent) => {
-      const delta = (direction === "col" ? ev.clientX : ev.clientY) - startPos;
+      const currentPos = direction === "col" ? ev.clientX : ev.clientY;
+      const delta = currentPos - startPos;
+      startPos = currentPos;
       onResize(delta);
     };
     const onUp = () => {
@@ -686,6 +688,17 @@ function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingC
                   2. Click <strong>Authorize APIs</strong> and log in with your Google Account.<br />
                   3. Click <strong>Exchange authorization code for tokens</strong>.<br />
                   4. Copy the resulting <strong>Access token</strong> and paste it above!
+                </div>
+              )}
+
+              {provider === "dropbox" && (
+                <div style={{ gridColumn: "1 / -1", fontSize: "0.85em", marginTop: "4px", backgroundColor: "rgba(255,255,255,0.05)", padding: "8px", borderRadius: "4px" }}>
+                  <strong>How to get a token:</strong><br />
+                  1. Visit <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noreferrer" style={{ color: "var(--accent-color)" }}>Dropbox App Console</a> and create an App.<br />
+                  2. Choose <strong>Scoped Access</strong>, <strong>Full Dropbox</strong>, and name it.<br />
+                  3. In the <strong>Permissions</strong> tab, check <code>files.metadata.read</code>, <code>files.content.read</code>, and <code>files.content.write</code>, then hit Submit.<br />
+                  4. Back in the <strong>Settings</strong> tab, scroll down to OAuth 2 and click <strong>Generate</strong>.<br />
+                  5. Copy your new Access Token and paste it above!
                 </div>
               )}
             </>
