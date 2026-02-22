@@ -3,11 +3,13 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use suppaftp::tokio::{AsyncFtpStream, AsyncRustlsConnector, AsyncRustlsFtpStream};
 use suppaftp::types::Mode;
 use tauri::{Emitter, State, Window};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 #[derive(Debug)]
 struct DummyVerifier(Arc<dyn ServerCertVerifier>);
@@ -107,9 +109,13 @@ pub async fn connect_ftp(
         // For FTPS: Use AsyncRustlsFtpStream::connect() which creates a stream
         // typed as ImplAsyncFtpStream<AsyncRustlsStream>, so into_secure
         // can properly resolve AsyncTlsConnector<Stream = AsyncRustlsStream>.
-        let ftp_stream = AsyncRustlsFtpStream::connect(&host_port)
-            .await
-            .map_err(|e| format!("Connection failed: {}", e))?;
+        let ftp_stream = timeout(
+            Duration::from_secs(10),
+            AsyncRustlsFtpStream::connect(&host_port),
+        )
+        .await
+        .map_err(|_| "Connection timed out".to_string())?
+        .map_err(|e| format!("Connection failed: {}", e))?;
 
         // Prepare Rustls config (rustls 0.23 API)
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -133,18 +139,24 @@ pub async fn connect_ftp(
         let connector = AsyncRustlsConnector::from(tls_connector);
 
         // Upgrade to TLS
-        let mut secure_stream = ftp_stream
-            .into_secure(connector, &config.host)
-            .await
-            .map_err(|e| format!("TLS upgrade failed: {}", e))?;
+        let mut secure_stream = timeout(
+            Duration::from_secs(10),
+            ftp_stream.into_secure(connector, &config.host),
+        )
+        .await
+        .map_err(|_| "TLS upgrade timed out".to_string())?
+        .map_err(|e| format!("TLS upgrade failed: {}", e))?;
 
-        secure_stream
-            .login(
+        timeout(
+            Duration::from_secs(10),
+            secure_stream.login(
                 config.username.as_str(),
                 config.password.as_deref().unwrap_or(""),
-            )
-            .await
-            .map_err(|e| format!("Secure Login failed: {}", e))?;
+            ),
+        )
+        .await
+        .map_err(|_| "Secure Login timed out".to_string())?
+        .map_err(|e| format!("Secure Login failed: {}", e))?;
 
         // Enable passive mode so data connections work through firewalls/NAT
         secure_stream.set_mode(Mode::Passive);
@@ -154,17 +166,21 @@ pub async fn connect_ftp(
         Ok(format!("Securely connected to {}", config.host))
     } else {
         // Plain FTP: connect and login directly
-        let mut ftp_stream = AsyncFtpStream::connect(&host_port)
+        let mut ftp_stream = timeout(Duration::from_secs(10), AsyncFtpStream::connect(&host_port))
             .await
+            .map_err(|_| "Connection timed out".to_string())?
             .map_err(|e| format!("Connection failed: {}", e))?;
 
-        ftp_stream
-            .login(
+        timeout(
+            Duration::from_secs(10),
+            ftp_stream.login(
                 config.username.as_str(),
                 config.password.as_deref().unwrap_or(""),
-            )
-            .await
-            .map_err(|e| format!("Login failed: {}", e))?;
+            ),
+        )
+        .await
+        .map_err(|_| "Login timed out".to_string())?
+        .map_err(|e| format!("Login failed: {}", e))?;
 
         // Enable passive mode so data connections work through firewalls/NAT
         ftp_stream.set_mode(Mode::Passive);
@@ -181,7 +197,7 @@ pub async fn disconnect_ftp(state: State<'_, FtpState>) -> Result<String, String
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            let _ = client.quit().await;
+            let _ = timeout(Duration::from_secs(5), client.quit()).await;
             *lock = None;
             return Ok("Disconnected secure session".into());
         }
@@ -191,7 +207,7 @@ pub async fn disconnect_ftp(state: State<'_, FtpState>) -> Result<String, String
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            let _ = client.quit().await;
+            let _ = timeout(Duration::from_secs(5), client.quit()).await;
             *lock = None;
             return Ok("Disconnected plain session".into());
         }
@@ -251,14 +267,14 @@ pub async fn list_remote_directory(
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
             if let Some(p) = dir_path {
-                client
-                    .cwd(p)
+                timeout(Duration::from_secs(5), client.cwd(p))
                     .await
+                    .map_err(|_| "CWD timed out".to_string())?
                     .map_err(|e| format!("CWD failed: {}", e))?;
             }
-            let lines = client
-                .list(None)
+            let lines = timeout(Duration::from_secs(30), client.list(None))
                 .await
+                .map_err(|_| "LIST timed out".to_string())?
                 .map_err(|e| format!("LIST failed: {}", e))?;
             let mut entries: Vec<RemoteFileEntry> =
                 lines.iter().filter_map(|l| parse_list_line(l)).collect();
@@ -276,14 +292,14 @@ pub async fn list_remote_directory(
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
             if let Some(p) = dir_path {
-                client
-                    .cwd(p)
+                timeout(Duration::from_secs(5), client.cwd(p))
                     .await
+                    .map_err(|_| "CWD timed out".to_string())?
                     .map_err(|e| format!("CWD failed: {}", e))?;
             }
-            let lines = client
-                .list(None)
+            let lines = timeout(Duration::from_secs(30), client.list(None))
                 .await
+                .map_err(|_| "LIST timed out".to_string())?
                 .map_err(|e| format!("LIST failed: {}", e))?;
             let mut entries: Vec<RemoteFileEntry> =
                 lines.iter().filter_map(|l| parse_list_line(l)).collect();
@@ -305,14 +321,20 @@ pub async fn get_remote_pwd(state: State<'_, FtpState>) -> Result<String, String
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            return client.pwd().await.map_err(|e| format!("PWD failed: {}", e));
+            return timeout(Duration::from_secs(5), client.pwd())
+                .await
+                .map_err(|_| "PWD timed out".to_string())?
+                .map_err(|e| format!("PWD failed: {}", e));
         }
     }
     // Try plain client
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            return client.pwd().await.map_err(|e| format!("PWD failed: {}", e));
+            return timeout(Duration::from_secs(5), client.pwd())
+                .await
+                .map_err(|_| "PWD timed out".to_string())?
+                .map_err(|e| format!("PWD failed: {}", e));
         }
     }
     Err("No active FTP connection".into())
@@ -340,11 +362,14 @@ pub async fn download_remote_file(
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
             // Try to get size
-            let total_size = client.size(&remote_name).await.unwrap_or(0) as u64;
-
-            let mut stream = client
-                .retr_as_stream(&remote_name)
+            let total_size = timeout(Duration::from_secs(5), client.size(&remote_name))
                 .await
+                .map_err(|_| "SIZE timed out".to_string())?
+                .unwrap_or(0) as u64;
+
+            let mut stream = timeout(Duration::from_secs(10), client.retr_as_stream(&remote_name))
+                .await
+                .map_err(|_| "Download initiation timed out".to_string())?
                 .map_err(|e| format!("Download failed: {}", e))?;
 
             let mut file = tokio::fs::File::create(&local_path)
@@ -379,9 +404,9 @@ pub async fn download_remote_file(
                 }
             }
 
-            client
-                .finalize_retr_stream(stream)
+            timeout(Duration::from_secs(10), client.finalize_retr_stream(stream))
                 .await
+                .map_err(|_| "Finalize timed out".to_string())?
                 .map_err(|e| format!("Finalize failed: {}", e))?;
 
             // Final emit
@@ -403,11 +428,14 @@ pub async fn download_remote_file(
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            let total_size = client.size(&remote_name).await.unwrap_or(0) as u64;
-
-            let mut stream = client
-                .retr_as_stream(&remote_name)
+            let total_size = timeout(Duration::from_secs(5), client.size(&remote_name))
                 .await
+                .map_err(|_| "SIZE timed out".to_string())?
+                .unwrap_or(0) as u64;
+
+            let mut stream = timeout(Duration::from_secs(10), client.retr_as_stream(&remote_name))
+                .await
+                .map_err(|_| "Download initiation timed out".to_string())?
                 .map_err(|e| format!("Download failed: {}", e))?;
 
             let mut file = tokio::fs::File::create(&local_path)
@@ -441,9 +469,9 @@ pub async fn download_remote_file(
                 }
             }
 
-            client
-                .finalize_retr_stream(stream)
+            timeout(Duration::from_secs(10), client.finalize_retr_stream(stream))
                 .await
+                .map_err(|_| "Finalize timed out".to_string())?
                 .map_err(|e| format!("Finalize failed: {}", e))?;
 
             let _ = window.emit(
@@ -485,10 +513,13 @@ pub async fn upload_file(
             let data = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let mut cursor = std::io::Cursor::new(data);
 
-            client
-                .put_file(&remote_name, &mut cursor)
-                .await
-                .map_err(|e| format!("Upload failed: {}", e))?;
+            timeout(
+                Duration::from_secs(60),
+                client.put_file(&remote_name, &mut cursor),
+            )
+            .await
+            .map_err(|_| "Upload timed out".to_string())?
+            .map_err(|e| format!("Upload failed: {}", e))?;
 
             let _ = window.emit(
                 "transfer-progress",
@@ -511,10 +542,13 @@ pub async fn upload_file(
             let data = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let mut cursor = std::io::Cursor::new(data);
 
-            client
-                .put_file(&remote_name, &mut cursor)
-                .await
-                .map_err(|e| format!("Upload failed: {}", e))?;
+            timeout(
+                Duration::from_secs(60),
+                client.put_file(&remote_name, &mut cursor),
+            )
+            .await
+            .map_err(|_| "Upload timed out".to_string())?
+            .map_err(|e| format!("Upload failed: {}", e))?;
 
             let _ = window.emit(
                 "transfer-progress",
@@ -542,9 +576,9 @@ pub async fn delete_remote_file(
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rm(&path)
+            timeout(Duration::from_secs(5), client.rm(&path))
                 .await
+                .map_err(|_| "Delete timed out".to_string())?
                 .map_err(|e| format!("Delete failed: {}", e))?;
             return Ok(format!("Deleted file: {}", path));
         }
@@ -553,9 +587,9 @@ pub async fn delete_remote_file(
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rm(&path)
+            timeout(Duration::from_secs(5), client.rm(&path))
                 .await
+                .map_err(|_| "Delete timed out".to_string())?
                 .map_err(|e| format!("Delete failed: {}", e))?;
             return Ok(format!("Deleted file: {}", path));
         }
@@ -572,9 +606,9 @@ pub async fn delete_remote_dir(state: State<'_, FtpState>, path: String) -> Resu
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rmdir(&path)
+            timeout(Duration::from_secs(5), client.rmdir(&path))
                 .await
+                .map_err(|_| "Delete timed out".to_string())?
                 .map_err(|e| format!("Delete generic failed (directory must be empty): {}", e))?;
             return Ok(format!("Deleted directory: {}", path));
         }
@@ -583,9 +617,9 @@ pub async fn delete_remote_dir(state: State<'_, FtpState>, path: String) -> Resu
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rmdir(&path)
+            timeout(Duration::from_secs(5), client.rmdir(&path))
                 .await
+                .map_err(|_| "Delete timed out".to_string())?
                 .map_err(|e| format!("Delete genric failed (directory must be empty): {}", e))?;
             return Ok(format!("Deleted directory: {}", path));
         }
@@ -603,9 +637,9 @@ pub async fn rename_remote_file(
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rename(&old_path, &new_path)
+            timeout(Duration::from_secs(5), client.rename(&old_path, &new_path))
                 .await
+                .map_err(|_| "Rename timed out".to_string())?
                 .map_err(|e| format!("Rename failed: {}", e))?;
             return Ok(format!("Renamed {} to {}", old_path, new_path));
         }
@@ -614,9 +648,9 @@ pub async fn rename_remote_file(
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .rename(&old_path, &new_path)
+            timeout(Duration::from_secs(5), client.rename(&old_path, &new_path))
                 .await
+                .map_err(|_| "Rename timed out".to_string())?
                 .map_err(|e| format!("Rename failed: {}", e))?;
             return Ok(format!("Renamed {} to {}", old_path, new_path));
         }
@@ -630,9 +664,9 @@ pub async fn create_remote_dir(state: State<'_, FtpState>, path: String) -> Resu
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .mkdir(&path)
+            timeout(Duration::from_secs(5), client.mkdir(&path))
                 .await
+                .map_err(|_| "Mkdir timed out".to_string())?
                 .map_err(|e| format!("Mkdir failed: {}", e))?;
             return Ok(format!("Created directory: {}", path));
         }
@@ -641,9 +675,9 @@ pub async fn create_remote_dir(state: State<'_, FtpState>, path: String) -> Resu
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
-            client
-                .mkdir(&path)
+            timeout(Duration::from_secs(5), client.mkdir(&path))
                 .await
+                .map_err(|_| "Mkdir timed out".to_string())?
                 .map_err(|e| format!("Mkdir failed: {}", e))?;
             return Ok(format!("Created directory: {}", path));
         }

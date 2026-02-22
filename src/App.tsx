@@ -650,7 +650,12 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig, onDragOverPan
       </div>
       <div className="tree-list">
         {loading && <div className="tree-loading-msg">Loading…</div>}
-        {error && <div className="tree-error">{error}</div>}
+        {error && (
+          <div className="tree-error">
+            {error}
+            <button className="btn-small" style={{ marginLeft: '10px', verticalAlign: 'middle' }} onClick={() => loadRemoteDir()}>Retry</button>
+          </div>
+        )}
         {!loading && !error && filteredEntries.length === 0 && (
           <div className="tree-empty">{searchQuery ? "No matches found" : "Empty directory"}</div>
         )}
