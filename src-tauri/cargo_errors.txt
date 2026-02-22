@@ -1,0 +1,174 @@
+﻿cargo :     Checking tauri-app 
+v1.0.0 (D:\scratch\quicksync-drive
+s\src-tauri)
+At line:1 char:1
++ cargo check 2>&1 | Out-File 
+-Encoding utf8 cargo_errors.txt
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : Not 
+   Specified: (    Checking ta..  
+  .ives\src-tauri):String) [],    
+ RemoteException
+    + FullyQualifiedErrorId : Nat 
+   iveCommandError
+ 
+error[E0599]: no method named 
+`emit` found for reference 
+`&AppHandle` in the current scope
+   --> src\lib.rs:76:40
+    |
+ 76 |                     let _ = 
+app_handle.emit("theme-changed", 
+"light");
+    |                             
+           ^^^^
+    |
+    = help: items from traits can 
+only be used if the trait is in 
+scope
+help: there is a method `exit` 
+with a similar name, but with 
+different arguments
+   --> C:\Users\skdso\.cargo\regis
+try\src\index.crates.io-1949cf8c6b
+5b557f\tauri-2.10.2\src\app.rs:532
+:3
+    |
+532 |   pub fn exit(&self, 
+exit_code: i32) {
+    |   
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `Emitter` which 
+provides `emit` is implemented 
+but not in scope; perhaps you 
+want to import it
+    |
+  1 + use tauri::Emitter;
+    |
+
+error[E0599]: no method named 
+`emit` found for reference 
+`&AppHandle` in the current scope
+   --> src\lib.rs:80:40
+    |
+ 80 |                     let _ = 
+app_handle.emit("theme-changed", 
+"dark");
+    |                             
+           ^^^^
+    |
+    = help: items from traits can 
+only be used if the trait is in 
+scope
+help: there is a method `exit` 
+with a similar name, but with 
+different arguments
+   --> C:\Users\skdso\.cargo\regis
+try\src\index.crates.io-1949cf8c6b
+5b557f\tauri-2.10.2\src\app.rs:532
+:3
+    |
+532 |   pub fn exit(&self, 
+exit_code: i32) {
+    |   
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `Emitter` which 
+provides `emit` is implemented 
+but not in scope; perhaps you 
+want to import it
+    |
+  1 + use tauri::Emitter;
+    |
+
+error[E0061]: this method takes 1 
+argument but 0 arguments were 
+supplied
+   --> src\lib.rs:97:26
+    |
+ 97 |                         
+.show();
+    |                          
+^^^^-- argument #1 is missing
+    |
+note: method defined here
+   --> C:\Users\skdso\.cargo\regis
+try\src\index.crates.io-1949cf8c6b
+5b557f\tauri-plugin-dialog-2.6.0\s
+rc\lib.rs:322:12
+    |
+322 |     pub fn show<F: 
+FnOnce(bool) + Send + 
+'static>(self, f: F) {
+    |            ^^^^
+help: provide the argument
+    |
+ 97 |                         
+.show(/* f */);
+    |                             
+  +++++++
+
+warning: unused import: 
+`tauri::Manager`
+ --> src\lib.rs:2:5
+  |
+2 | use tauri::Manager;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: 
+`#[warn(unused_imports)]` (part 
+of `#[warn(unused)]`) on by 
+default
+
+warning: unused variable: `window`
+   --> src\cloud_client.rs:289:5
+    |
+289 |     window: Window,
+    |     ^^^^^^ help: if this is 
+intentional, prefix it with an 
+underscore: `_window`
+    |
+    = note: 
+`#[warn(unused_variables)]` (part 
+of `#[warn(unused)]`) on by 
+default
+
+warning: unused variable: 
+`transfer_id`
+   --> src\cloud_client.rs:295:9
+    |
+295 |     let transfer_id = 
+format!("ul-{}", 
+uuid::Uuid::new_v4());
+    |         ^^^^^^^^^^^ help: 
+if this is intentional, prefix it 
+with an underscore: `_transfer_id`
+
+warning: unused variable: 
+`file_name`
+   --> src\cloud_client.rs:296:9
+    |
+296 |     let file_name = 
+std::path::Path::new(&local_path)
+    |         ^^^^^^^^^ help: if 
+this is intentional, prefix it 
+with an underscore: `_file_name`
+
+warning: unused variable: `size`
+   --> src\ftp_client.rs:332:9
+    |
+332 |     let size = {
+    |         ^^^^ help: if this 
+is intentional, prefix it with an 
+underscore: `_size`
+
+Some errors have detailed 
+explanations: E0061, E0599.
+For more information about an 
+error, try `rustc --explain 
+E0061`.
+warning: `tauri-app` (lib) 
+generated 5 warnings
+error: could not compile 
+`tauri-app` (lib) due to 3 
+previous errors; 5 warnings 
+emitted

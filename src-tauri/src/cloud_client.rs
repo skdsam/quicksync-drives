@@ -286,14 +286,14 @@ pub async fn download_cloud_file(
 
 #[tauri::command]
 pub async fn upload_cloud_file(
-    window: Window,
+    _window: Window,
     provider: String,
     token: String,
     local_path: String,
     remote_parent_id: Option<String>,
 ) -> Result<String, String> {
-    let transfer_id = format!("ul-{}", uuid::Uuid::new_v4());
-    let file_name = std::path::Path::new(&local_path)
+    let _transfer_id = format!("ul-{}", uuid::Uuid::new_v4());
+    let _file_name = std::path::Path::new(&local_path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown_file");

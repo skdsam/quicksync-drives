@@ -1,5 +1,5 @@
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, Submenu};
-use tauri::Manager;
+use tauri::Emitter;
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
@@ -94,7 +94,7 @@ pub fn run() {
                         .dialog()
                         .message("QuickSync Drives v1.0\nA multi-cloud sync and FTP client.")
                         .title("About QuickSync Drives")
-                        .show();
+                        .show(|_| {});
                 }
             });
 

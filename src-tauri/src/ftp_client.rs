@@ -329,7 +329,7 @@ pub async fn download_remote_file(
     let transfer_id = format!("dl-{}", uuid::Uuid::new_v4());
 
     // Get file size for progress bar
-    let size = {
+    let _size = {
         // We try to get size from LIST or just use 0 if unknown
         // For simplicity, we'll try MDTM or just use a default
         0 // Placeholder if we can't get it easily without a separate call
