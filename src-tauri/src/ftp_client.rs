@@ -472,7 +472,7 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     let transfer_id = format!("ul-{}", uuid::Uuid::new_v4());
 
-    let mut file = tokio::fs::File::open(&local_path)
+    let file = tokio::fs::File::open(&local_path)
         .await
         .map_err(|e| format!("Read failed: {}", e))?;
     let metadata = file.metadata().await.map_err(|e| e.to_string())?;

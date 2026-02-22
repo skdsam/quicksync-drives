@@ -938,6 +938,11 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeTransfers, setActiveTransfers] = useState<Record<string, TransferProgress>>({});
 
+  const handleClearQueue = () => {
+    setTransferMsgs([]);
+    setActiveTransfers({});
+  };
+
   // Resizable panel sizes
   const [sidebarW, setSidebarW] = useState(() => restore("sidebar-w", 240));
   const [leftRatio, setLeftRatio] = useState(() => restore("left-ratio", 50));
@@ -1368,7 +1373,18 @@ function App() {
         <Resizer direction="row" onResize={onQueueResize} />
         <footer className="queue-panel" style={{ height: queueH, minHeight: queueH }}>
           <div className="queue-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Transfer Queue</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span>Transfer Queue</span>
+              {(transferMsgs.length > 0 || Object.keys(activeTransfers).length > 0) && (
+                <button
+                  className="btn-small btn-danger"
+                  style={{ padding: '2px 8px', fontSize: '10px', textTransform: 'none', letterSpacing: 'normal' }}
+                  onClick={handleClearQueue}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
             <div className="download-dir-picker" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Download To:</span>
               <input
