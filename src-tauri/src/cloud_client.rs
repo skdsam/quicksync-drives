@@ -1,5 +1,16 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Window};
+use tokio::io::AsyncWriteExt;
+
+#[derive(Serialize, Clone)]
+pub struct TransferProgress {
+    pub transfer_id: String,
+    pub filename: String,
+    pub progress: u64,
+    pub total: u64,
+    pub status: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct CloudEntry {
@@ -140,49 +151,77 @@ pub async fn list_cloud_directory(
 
 #[tauri::command]
 pub async fn download_cloud_file(
+    window: Window,
     provider: String,
     token: String,
     file_id: String,
     local_path: String,
 ) -> Result<String, String> {
+    let transfer_id = format!("dl-{}", uuid::Uuid::new_v4());
+    let client = Client::new();
+
     if provider == "google" {
         let url = format!(
             "https://www.googleapis.com/drive/v3/files/{}?alt=media",
             file_id
         );
-        let client = Client::new();
-
         let mut res = client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token.trim()))
             .send()
             .await
-            .map_err(|e| format!("Failed to initiate download: {}", e))?;
+            .map_err(|e| format!("Google Drive Download request failed: {}", e))?;
 
         if !res.status().is_success() {
             let err_text = res.text().await.unwrap_or_default();
-            return Err(format!("Download API Error: {}", err_text));
+            return Err(format!("Google Drive Download Error: {}", err_text));
         }
 
-        let mut file = std::fs::File::create(&local_path)
+        let total_size = res.content_length().unwrap_or(0);
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
             .map_err(|e| format!("Failed to create local file: {}", e))?;
 
+        let mut downloaded = 0u64;
         while let Some(chunk) = res
             .chunk()
             .await
             .map_err(|e| format!("Error reading stream: {}", e))?
         {
-            use std::io::Write;
             file.write_all(&chunk)
+                .await
                 .map_err(|e| format!("Failed to write to local file: {}", e))?;
+            downloaded += chunk.len() as u64;
+
+            if total_size > 0 {
+                let _ = window.emit(
+                    "transfer-progress",
+                    TransferProgress {
+                        transfer_id: transfer_id.clone(),
+                        filename: file_id.clone(),
+                        progress: downloaded,
+                        total: total_size,
+                        status: "downloading".into(),
+                    },
+                );
+            }
         }
+
+        let _ = window.emit(
+            "transfer-progress",
+            TransferProgress {
+                transfer_id: transfer_id.clone(),
+                filename: file_id.clone(),
+                progress: downloaded,
+                total: total_size,
+                status: "complete".into(),
+            },
+        );
 
         return Ok(format!("Successfully downloaded file to {}", local_path));
     } else if provider == "dropbox" {
-        let client = Client::new();
-
         let path_arg = serde_json::json!({
-            "path": if file_id.starts_with("id:") { file_id } else { format!("id:{}", file_id) }
+            "path": if file_id.starts_with("id:") { &file_id } else { &file_id } // Check if id: is already there
         });
 
         let mut res = client
@@ -195,21 +234,49 @@ pub async fn download_cloud_file(
 
         if !res.status().is_success() {
             let err_text = res.text().await.unwrap_or_default();
-            return Err(format!("Dropbox Download API Error: {}", err_text));
+            return Err(format!("Dropbox Download Error: {}", err_text));
         }
 
-        let mut file = std::fs::File::create(&local_path)
+        let total_size = res.content_length().unwrap_or(0);
+        let mut file = tokio::fs::File::create(&local_path)
+            .await
             .map_err(|e| format!("Failed to create local file: {}", e))?;
 
+        let mut downloaded = 0u64;
         while let Some(chunk) = res
             .chunk()
             .await
             .map_err(|e| format!("Error reading stream: {}", e))?
         {
-            use std::io::Write;
             file.write_all(&chunk)
+                .await
                 .map_err(|e| format!("Failed to write to local file: {}", e))?;
+            downloaded += chunk.len() as u64;
+
+            if total_size > 0 {
+                let _ = window.emit(
+                    "transfer-progress",
+                    TransferProgress {
+                        transfer_id: transfer_id.clone(),
+                        filename: file_id.clone(),
+                        progress: downloaded,
+                        total: total_size,
+                        status: "downloading".into(),
+                    },
+                );
+            }
         }
+
+        let _ = window.emit(
+            "transfer-progress",
+            TransferProgress {
+                transfer_id: transfer_id,
+                filename: file_id,
+                progress: downloaded,
+                total: total_size,
+                status: "complete".into(),
+            },
+        );
 
         return Ok(format!("Successfully downloaded file to {}", local_path));
     }
@@ -219,11 +286,18 @@ pub async fn download_cloud_file(
 
 #[tauri::command]
 pub async fn upload_cloud_file(
+    window: Window,
     provider: String,
     token: String,
     local_path: String,
     remote_parent_id: Option<String>,
 ) -> Result<String, String> {
+    let transfer_id = format!("ul-{}", uuid::Uuid::new_v4());
+    let file_name = std::path::Path::new(&local_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown_file");
+
     if provider == "google" {
         // Read the local file
         let file = std::fs::File::open(&local_path)

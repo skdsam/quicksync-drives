@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use suppaftp::tokio::{AsyncFtpStream, AsyncRustlsConnector, AsyncRustlsFtpStream};
 use suppaftp::types::Mode;
-use tauri::State;
+use tauri::{Emitter, State, Window};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 #[derive(Debug)]
@@ -84,6 +85,15 @@ pub struct FtpConfigPayload {
     pub username: String,
     pub password: Option<String>,
     pub secure: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct TransferProgress {
+    pub transfer_id: String,
+    pub filename: String,
+    pub progress: u64,
+    pub total: u64,
+    pub status: String,
 }
 
 #[tauri::command]
@@ -310,52 +320,144 @@ pub async fn get_remote_pwd(state: State<'_, FtpState>) -> Result<String, String
 
 #[tauri::command]
 pub async fn download_remote_file(
+    window: Window,
     state: State<'_, FtpState>,
     remote_name: String,
     local_path: String,
 ) -> Result<String, String> {
-    use tokio::io::AsyncReadExt;
+    // Generate a unique ID for this transfer
+    let transfer_id = format!("dl-{}", uuid::Uuid::new_v4());
+
+    // Get file size for progress bar
+    let size = {
+        // We try to get size from LIST or just use 0 if unknown
+        // For simplicity, we'll try MDTM or just use a default
+        0 // Placeholder if we can't get it easily without a separate call
+    };
 
     // Try secure client first
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
+            // Try to get size
+            let total_size = client.size(&remote_name).await.unwrap_or(0) as u64;
+
             let mut stream = client
                 .retr_as_stream(&remote_name)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
-            let mut buf = Vec::new();
-            stream
-                .read_to_end(&mut buf)
+
+            let mut file = tokio::fs::File::create(&local_path)
                 .await
-                .map_err(|e| format!("Read stream failed: {}", e))?;
+                .map_err(|e| format!("Capture failed: {}", e))?;
+
+            let mut buffer = [0u8; 16384];
+            let mut downloaded = 0u64;
+
+            loop {
+                let n = stream.read(&mut buffer).await.map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buffer[..n])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                downloaded += n as u64;
+
+                // Emit progress
+                if total_size > 0 {
+                    let _ = window.emit(
+                        "transfer-progress",
+                        TransferProgress {
+                            transfer_id: transfer_id.clone(),
+                            filename: remote_name.clone(),
+                            progress: downloaded,
+                            total: total_size,
+                            status: "downloading".into(),
+                        },
+                    );
+                }
+            }
+
             client
                 .finalize_retr_stream(stream)
                 .await
                 .map_err(|e| format!("Finalize failed: {}", e))?;
-            std::fs::write(&local_path, &buf).map_err(|e| format!("Save failed: {}", e))?;
-            return Ok(format!("Downloaded {} ({} bytes)", remote_name, buf.len()));
+
+            // Final emit
+            let _ = window.emit(
+                "transfer-progress",
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    filename: remote_name.clone(),
+                    progress: downloaded,
+                    total: total_size,
+                    status: "complete".into(),
+                },
+            );
+
+            return Ok(format!("Downloaded {}", remote_name));
         }
     }
     // Try plain client
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
+            let total_size = client.size(&remote_name).await.unwrap_or(0) as u64;
+
             let mut stream = client
                 .retr_as_stream(&remote_name)
                 .await
                 .map_err(|e| format!("Download failed: {}", e))?;
-            let mut buf = Vec::new();
-            stream
-                .read_to_end(&mut buf)
+
+            let mut file = tokio::fs::File::create(&local_path)
                 .await
-                .map_err(|e| format!("Read stream failed: {}", e))?;
+                .map_err(|e| format!("Capture failed: {}", e))?;
+
+            let mut buffer = [0u8; 16384];
+            let mut downloaded = 0u64;
+
+            loop {
+                let n = stream.read(&mut buffer).await.map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buffer[..n])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                downloaded += n as u64;
+
+                if total_size > 0 {
+                    let _ = window.emit(
+                        "transfer-progress",
+                        TransferProgress {
+                            transfer_id: transfer_id.clone(),
+                            filename: remote_name.clone(),
+                            progress: downloaded,
+                            total: total_size,
+                            status: "downloading".into(),
+                        },
+                    );
+                }
+            }
+
             client
                 .finalize_retr_stream(stream)
                 .await
                 .map_err(|e| format!("Finalize failed: {}", e))?;
-            std::fs::write(&local_path, &buf).map_err(|e| format!("Save failed: {}", e))?;
-            return Ok(format!("Downloaded {} ({} bytes)", remote_name, buf.len()));
+
+            let _ = window.emit(
+                "transfer-progress",
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    filename: remote_name.clone(),
+                    progress: downloaded,
+                    total: total_size,
+                    status: "complete".into(),
+                },
+            );
+
+            return Ok(format!("Downloaded {}", remote_name));
         }
     }
     Err("No active FTP connection".into())
@@ -363,35 +465,69 @@ pub async fn download_remote_file(
 
 #[tauri::command]
 pub async fn upload_file(
+    window: Window,
     state: State<'_, FtpState>,
     local_path: String,
     remote_name: String,
 ) -> Result<String, String> {
-    let data = std::fs::read(&local_path).map_err(|e| format!("Read failed: {}", e))?;
-    let size = data.len();
+    let transfer_id = format!("ul-{}", uuid::Uuid::new_v4());
+
+    let mut file = tokio::fs::File::open(&local_path)
+        .await
+        .map_err(|e| format!("Read failed: {}", e))?;
+    let metadata = file.metadata().await.map_err(|e| e.to_string())?;
+    let total_size = metadata.len();
 
     // Try secure client first
     {
         let mut lock = state.secure_client.lock().await;
         if let Some(ref mut client) = *lock {
+            let data = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let mut cursor = std::io::Cursor::new(data);
+
             client
                 .put_file(&remote_name, &mut cursor)
                 .await
                 .map_err(|e| format!("Upload failed: {}", e))?;
-            return Ok(format!("Uploaded {} ({} bytes)", remote_name, size));
+
+            let _ = window.emit(
+                "transfer-progress",
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    filename: remote_name.clone(),
+                    progress: total_size,
+                    total: total_size,
+                    status: "complete".into(),
+                },
+            );
+
+            return Ok(format!("Uploaded {}", remote_name));
         }
     }
     // Try plain client
     {
         let mut lock = state.client.lock().await;
         if let Some(ref mut client) = *lock {
+            let data = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let mut cursor = std::io::Cursor::new(data);
+
             client
                 .put_file(&remote_name, &mut cursor)
                 .await
                 .map_err(|e| format!("Upload failed: {}", e))?;
-            return Ok(format!("Uploaded {} ({} bytes)", remote_name, size));
+
+            let _ = window.emit(
+                "transfer-progress",
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    filename: remote_name.clone(),
+                    progress: total_size,
+                    total: total_size,
+                    status: "complete".into(),
+                },
+            );
+
+            return Ok(format!("Uploaded {}", remote_name));
         }
     }
     Err("No active FTP connection".into())

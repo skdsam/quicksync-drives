@@ -27,11 +27,40 @@ interface TreeNode extends FileEntry {
   loading?: boolean;
 }
 
+interface TransferProgress {
+  transfer_id: string;
+  filename: string;
+  progress: number;
+  total: number;
+  status: string;
+}
+
 /* ───────── Helpers ───────── */
 function formatSize(size: number | null): string {
   if (size === null || size === 0) return "-";
   const i = Math.floor(Math.log(size) / Math.log(1024));
   return `${(size / Math.pow(1024, i)).toFixed(2)} ${['B', 'KB', 'MB', 'GB', 'TB'][i]}`;
+}
+
+function ProgressItem({ transfer }: { transfer: TransferProgress }) {
+  const percent = transfer.total > 0 ? (transfer.progress / transfer.total) * 100 : 0;
+
+  return (
+    <div className="progress-item">
+      <div className="progress-info">
+        <span className="progress-filename" title={transfer.filename}>{transfer.filename}</span>
+        <span className="progress-status">
+          {transfer.status === 'complete' ? 'Complete' : `${formatSize(transfer.progress)} / ${formatSize(transfer.total)}`}
+        </span>
+      </div>
+      <div className="progress-bar-container">
+        <div
+          className={`progress-bar-fill ${transfer.status}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 function persist(key: string, value: number) {
@@ -79,6 +108,7 @@ function FileTree({ rootPath, onTransferMsg, onDragOverPanel, refreshKey }: {
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, entry: FileEntry | null } | null>(null);
 
   const onContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
@@ -166,6 +196,10 @@ function FileTree({ rootPath, onTransferMsg, onDragOverPanel, refreshKey }: {
     }
   };
 
+  const filteredTree = tree.filter(node =>
+    node.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const renderNodes = (nodes: TreeNode[], indexPath: number[] = [], depth = 0): React.ReactNode[] => {
     return nodes.map((node, i) => {
       const path = [...indexPath, i];
@@ -192,6 +226,8 @@ function FileTree({ rootPath, onTransferMsg, onDragOverPanel, refreshKey }: {
       );
     });
   };
+
+  const visibleNodes = searchQuery ? filteredTree : tree;
 
   // Navigate up
   const goUp = () => {
@@ -242,14 +278,27 @@ function FileTree({ rootPath, onTransferMsg, onDragOverPanel, refreshKey }: {
     >
       <div className="tree-toolbar">
         <button className="btn-icon" onClick={goUp} title="Go up">⬆</button>
-        <span className="tree-path" title={currentPath}>{currentPath}</span>
+        <div className="search-container">
+          <input
+            type="text"
+            placeholder="Search..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+          />
+          {searchQuery && (
+            <button className="btn-clear-search" onClick={() => setSearchQuery("")}>✕</button>
+          )}
+        </div>
         <button className="btn-icon" onClick={() => loadDir(currentPath).then(setTree)} title="Refresh">↻</button>
       </div>
       <div className="tree-list">
         {error && <div className="tree-error">{error}</div>}
-        {!error && tree.length === 0 && <div className="tree-empty">Empty directory</div>}
+        {!error && visibleNodes.length === 0 && (
+          <div className="tree-empty">{searchQuery ? "No matches found" : "Empty directory"}</div>
+        )}
         {dragging && <div className="drop-indicator">Drop to Copy to Local</div>}
-        {renderNodes(tree)}
+        {renderNodes(visibleNodes)}
 
         {contextMenu && contextMenu.entry && (
           <div
@@ -278,6 +327,7 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig, onDragOverPan
   refreshKey?: number
 }) {
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [remotePath, setRemotePath] = useState("/");
   const [pathStack, setPathStack] = useState<{ id: string, name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -568,6 +618,10 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig, onDragOverPan
     loadRemoteDir();
   };
 
+  const filteredEntries = entries.filter(entry =>
+    entry.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <div
       className={`file-tree ${dragging ? 'file-tree-dragover' : ''}`}
@@ -579,15 +633,28 @@ function RemoteFileTree({ onTransferMsg, downloadDir, cloudConfig, onDragOverPan
     >
       <div className="tree-toolbar">
         <button className="btn-icon" onClick={goUp} title="Go up">⬆</button>
-        <span className="tree-path" title={remotePath}>{remotePath}</span>
+        <div className="search-container">
+          <input
+            type="text"
+            placeholder="Search..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+          />
+          {searchQuery && (
+            <button className="btn-clear-search" onClick={() => setSearchQuery("")}>✕</button>
+          )}
+        </div>
         <button className="btn-icon" onClick={() => loadRemoteDir()} title="Refresh">↻</button>
       </div>
       <div className="tree-list">
         {loading && <div className="tree-loading-msg">Loading…</div>}
         {error && <div className="tree-error">{error}</div>}
-        {!loading && !error && entries.length === 0 && <div className="tree-empty">Empty directory</div>}
+        {!loading && !error && filteredEntries.length === 0 && (
+          <div className="tree-empty">{searchQuery ? "No matches found" : "Empty directory"}</div>
+        )}
         {dragging && <div className="drop-indicator">Drop files here to upload</div>}
-        {entries.map((entry) => (
+        {filteredEntries.map((entry) => (
           <div
             key={entry.name}
             className="tree-row"
@@ -869,6 +936,7 @@ function App() {
   const [downloadDir, setDownloadDir] = useState(() => localStorage.getItem("qs-download-dir") || "");
   const [currentRemotePath, setCurrentRemotePath] = useState("/");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [activeTransfers, setActiveTransfers] = useState<Record<string, TransferProgress>>({});
 
   // Resizable panel sizes
   const [sidebarW, setSidebarW] = useState(() => restore("sidebar-w", 240));
@@ -927,6 +995,35 @@ function App() {
       unlisten.then((f) => f());
     };
   }, [config, saveConfig]);
+
+  // Handle Transfer Progress Events
+  useEffect(() => {
+    const unlisten = listen<TransferProgress>("transfer-progress", (event) => {
+      const p = event.payload;
+      setActiveTransfers((prev) => {
+        // If complete, we might want to keep it for a few seconds then remove
+        if (p.status === 'complete') {
+          // Trigger a refresh after upload completes
+          setRefreshKey(k => k + 1);
+
+          const next = { ...prev, [p.transfer_id]: p };
+          setTimeout(() => {
+            setActiveTransfers(curr => {
+              const cleaned = { ...curr };
+              delete cleaned[p.transfer_id];
+              return cleaned;
+            });
+          }, 5000);
+          return next;
+        }
+        return { ...prev, [p.transfer_id]: p };
+      });
+    });
+
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   /* ── Connection CRUD ── */
   const handleSaveFtp = (conn: FtpConnection) => {
@@ -1284,10 +1381,13 @@ function App() {
               <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={handleBrowseDownloadDir}>Browse</button>
             </div>
           </div>
-          {transferMsgs.length === 0 ? (
+          {transferMsgs.length === 0 && Object.keys(activeTransfers).length === 0 ? (
             <div className="queue-empty">No active transfers.</div>
           ) : (
             <div className="queue-list">
+              {Object.values(activeTransfers).map((t) => (
+                <ProgressItem key={t.transfer_id} transfer={t} />
+              ))}
               {transferMsgs.map((msg, i) => (
                 <div key={i} className="queue-item">{msg}</div>
               ))}
