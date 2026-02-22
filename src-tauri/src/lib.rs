@@ -5,8 +5,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 pub mod config;
 pub mod fs_commands;
-pub mod ftp_client;
-pub mod oauth;
+mod ftp_client;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -106,8 +105,7 @@ pub fn run() {
             ftp_client::download_remote_folder,
             fs_commands::list_directory,
             fs_commands::get_home_dir,
-            fs_commands::get_file_icon,
-            oauth::start_oauth_flow
+            fs_commands::get_file_icon
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

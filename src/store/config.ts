@@ -15,8 +15,6 @@ export interface CloudConnection {
     id: string;
     provider: string; // "google", "dropbox"
     account_name: string;
-    client_id: string;
-    client_secret: string;
     access_token: string;
     refresh_token?: string;
 }

@@ -524,10 +524,7 @@ function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingC
   // Cloud State
   const [provider, setProvider] = useState(editingCloud?.provider || "google");
   const [accountName, setAccountName] = useState(editingCloud?.account_name || "");
-  const [clientId, setClientId] = useState(editingCloud?.client_id || "");
-  const [clientSecret, setClientSecret] = useState(editingCloud?.client_secret || "");
-  const [authStatus, setAuthStatus] = useState("");
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [accessToken, setAccessToken] = useState(editingCloud?.access_token || "");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -542,39 +539,14 @@ function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingC
         secure,
       });
       onClose();
-    }
-  };
-
-  const handleAuthenticate = async () => {
-    if (!clientId || !clientSecret) {
-      setAuthStatus("Please provide Client ID and Secret.");
-      return;
-    }
-    setIsAuthenticating(true);
-    setAuthStatus("Opening browser for authentication...");
-    try {
-      const tokens = await invoke<any>("start_oauth_flow", {
-        provider,
-        clientId,
-        clientSecret
-      });
-
+    } else if (type === "cloud") {
       onSaveCloud({
         id: editingCloud?.id || Date.now().toString(),
         provider,
         account_name: accountName || `${provider} Account`,
-        client_id: clientId,
-        client_secret: clientSecret,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
+        access_token: accessToken,
       });
-
-      setAuthStatus("Successfully authenticated and saved!");
-      setTimeout(onClose, 1000);
-    } catch (err: any) {
-      setAuthStatus(`Authentication failed: ${err}`);
-    } finally {
-      setIsAuthenticating(false);
+      onClose();
     }
   };
 
@@ -642,38 +614,28 @@ function ConnectionModal({ onClose, onSaveFtp, onSaveCloud, editingFtp, editingC
               <label>Account Name</label>
               <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="Personal Drive" />
 
-              <label>Client ID *</label>
-              <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="OAuth Client ID" required />
+              <label>Access Token *</label>
+              <input type="password" value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="Paste your OAuth Access Token here" required />
 
-              <label>Client Secret *</label>
-              <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="OAuth Client Secret" required />
+              {provider === "google" && (
+                <div style={{ gridColumn: "1 / -1", fontSize: "0.85em", marginTop: "4px", backgroundColor: "rgba(255,255,255,0.05)", padding: "8px", borderRadius: "4px" }}>
+                  <strong>How to get a token:</strong><br />
+                  1. Visit <a href="https://developers.google.com/oauthplayground/?code=4/0AfrIepCWgy_WF6Z2TVbyMfpuSzWfI4lK80YDHW5qiXPpcgN493kIxcNXvITg1pFJAIHrKA&scope=https://www.googleapis.com/auth/drive" target="_blank" rel="noreferrer" style={{ color: "var(--accent-color)" }}>Google OAuth Playground</a>.<br />
+                  2. Click <strong>Authorize APIs</strong> and log in with your Google Account.<br />
+                  3. Click <strong>Exchange authorization code for tokens</strong>.<br />
+                  4. Copy the resulting <strong>Access token</strong> and paste it above!
+                </div>
+              )}
             </>
           )}
         </div>
 
         <div className="modal-actions" style={{ flexDirection: "column", gap: "10px" }}>
-          {type === "cloud" && (
-            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: '8px' }}>
-              <button
-                type="button"
-                className="btn-primary"
-                style={{ width: '100%' }}
-                onClick={handleAuthenticate}
-                disabled={isAuthenticating}
-              >
-                {isAuthenticating ? "Authenticating..." : "Authenticate with Browser"}
-              </button>
-              {authStatus && <div style={{ fontSize: '0.85em', textAlign: 'center', color: authStatus.includes('fail') ? '#ef4444' : '#10b981' }}>{authStatus}</div>}
-            </div>
-          )}
-
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', width: '100%', marginTop: '8px' }}>
             <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-            {type === "ftp" && (
-              <button type="submit" className="btn-primary">
-                {editingFtp ? "Save" : "Add Connection"}
-              </button>
-            )}
+            <button type="submit" className="btn-primary">
+              {editingFtp || editingCloud ? "Save" : "Add Connection"}
+            </button>
           </div>
         </div>
       </form>
